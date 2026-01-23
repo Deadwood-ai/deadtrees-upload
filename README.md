@@ -14,16 +14,18 @@ Batch upload datasets to [deadtrees.earth](https://deadtrees.earth).
 
 ## Installation
 
-```bash
-pip install deadtrees-upload
-```
-
-Or install from source:
+Install from source:
 
 ```bash
 git clone https://github.com/Deadwood-ai/deadtrees-upload.git
 cd deadtrees-upload
 pip install -e .
+```
+
+Or install directly from GitHub:
+
+```bash
+pip install git+https://github.com/Deadwood-ai/deadtrees-upload.git
 ```
 
 ## Quick Start
