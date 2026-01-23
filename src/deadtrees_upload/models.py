@@ -42,9 +42,9 @@ class FileMetadata(BaseModel):
 	license: LicenseEnum = Field(..., description="License for the dataset")
 	platform: PlatformEnum = Field(..., description="Platform used for capture")
 	authors: List[str] = Field(..., description="List of author names")
+	acquisition_year: int = Field(..., ge=1980, le=2099, description="Year of data acquisition (required)")
 	
 	# Optional fields
-	acquisition_year: Optional[int] = Field(None, ge=1980, le=2099)
 	acquisition_month: Optional[int] = Field(None, ge=1, le=12)
 	acquisition_day: Optional[int] = Field(None, ge=1, le=31)
 	data_access: DataAccessEnum = Field(default=DataAccessEnum.public)

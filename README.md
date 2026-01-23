@@ -84,15 +84,14 @@ Create a CSV or Excel file with the following columns:
 | `license` | Data license | `CC BY`, `CC BY-SA`, `CC BY-NC-SA`, `CC BY-NC`, `MIT` |
 | `platform` | Capture platform | `drone`, `airborne` |
 | `authors` | Author names (semicolon-separated) | e.g., `John Smith; Jane Doe` |
+| `acquisition_date` OR `acquisition_year` | Date of data capture (required) | Date: `2024-06-15`, `2024-06`, `2024` / Year: `1980-2099` |
 
 ### Optional Columns
 
 | Column | Description | Valid Values |
 |--------|-------------|--------------|
-| `acquisition_year` | Year of data capture | 1980-2099 |
 | `acquisition_month` | Month of data capture | 1-12 |
 | `acquisition_day` | Day of data capture | 1-31 |
-| `acquisition_date` | Full date (parsed automatically) | e.g., `2024-06-15`, `2024-06`, `2024` |
 | `data_access` | Access level | `public` (default), `private`, `viewonly` |
 | `additional_information` | Additional notes | Free text |
 | `citation_doi` | DOI if published | e.g., `10.1234/example` |
@@ -105,6 +104,13 @@ ortho_001.tif,CC BY,drone,John Smith; Jane Doe,2024-06-15,public,Forest survey s
 ortho_002.tif,CC BY,drone,John Smith,2024-06-16,public,
 raw_images.zip,CC BY-SA,drone,Research Team,2024-07,public,Raw drone images for ODM
 ```
+
+**Note:** The `acquisition_date` column is **required**. You can provide it as:
+- Full date: `2024-06-15`
+- Year and month: `2024-06`
+- Year only: `2024`
+
+Alternatively, you can use separate `acquisition_year`, `acquisition_month`, `acquisition_day` columns.
 
 A template is included in `templates/metadata_template.csv`.
 

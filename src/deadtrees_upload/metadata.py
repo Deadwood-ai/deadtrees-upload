@@ -239,6 +239,10 @@ def parse_metadata(
 				if required not in data or not data[required]:
 					raise ValueError(f"Missing required field: {required}")
 			
+			# Acquisition year is required (can come from acquisition_date or acquisition_year)
+			if "acquisition_year" not in data or not data["acquisition_year"]:
+				raise ValueError("Missing required field: acquisition_year (provide acquisition_year or acquisition_date)")
+			
 			# Parse and validate
 			metadata = FileMetadata(**data)
 			metadata_list.append(metadata)
