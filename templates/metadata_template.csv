@@ -1,0 +1,4 @@
+filename,license,platform,authors,acquisition_year,acquisition_month,acquisition_day,data_access,additional_information,citation_doi
+example_ortho_001.tif,CC BY,drone,John Smith; Jane Doe,2024,6,15,public,Example dataset from drone survey,
+example_ortho_002.tif,CC BY,drone,John Smith,2024,6,16,public,,
+raw_images_003.zip,CC BY-SA,drone,Research Team,2024,7,,public,Raw drone images for ODM processing,10.1234/example.doi
