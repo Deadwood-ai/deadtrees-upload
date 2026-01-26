@@ -128,11 +128,22 @@ def find_metadata_files_in_directory(directory: Path) -> List[Path]:
 
 
 def select_metadata_file(data_dir: Path) -> Path:
-	"""Prompt for metadata file, auto-detecting files in data directory."""
+	"""Prompt for metadata file, auto-detecting files in data directory or creating one."""
 	print_step(3, "Metadata File")
 	
 	# Check for metadata files in data directory
 	found_files = find_metadata_files_in_directory(data_dir)
+	
+	# If no metadata files found, offer to create one
+	if not found_files:
+		console.print("[yellow]No metadata files found in data directory.[/yellow]")
+		if Confirm.ask("Would you like to create a metadata template?"):
+			from .template import run_template_wizard
+			template_path = run_template_wizard(data_dir)
+			console.print(f"\n[green]✓[/green] Template created: {template_path}")
+			console.print("[dim]Please review and edit the template if needed, then press Enter to continue.[/dim]")
+			Prompt.ask("Press Enter when ready")
+			return template_path
 	
 	if found_files:
 		console.print(f"[green]Found {len(found_files)} metadata file(s) in data directory:[/green]")

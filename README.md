@@ -4,12 +4,15 @@ Batch upload datasets to [deadtrees.earth](https://deadtrees.earth).
 
 ## Features
 
-- **Interactive CLI** - Step-by-step guided upload process
+- **Interactive CLI** - Step-by-step guided upload process with retry on errors
 - **Batch uploads** - Upload multiple GeoTIFFs or raw image ZIPs at once
+- **Single file support** - Upload individual files directly (not just directories)
+- **Template wizard** - Auto-create metadata files with date detection from files
 - **Auto token refresh** - Handles long-running uploads without re-authentication
 - **Resume support** - Automatically resume interrupted uploads
 - **Duplicate detection** - Prevents uploading the same file twice
 - **File validation** - Validates GeoTIFFs (CRS, bands) and ZIPs (GPS data) before upload
+- **Automatic date extraction** - Detects acquisition dates from GeoTIFF metadata and EXIF
 - **Automatic processing** - Triggers the processing pipeline after upload
 
 ## Installation
@@ -66,6 +69,23 @@ The CLI will guide you through:
 3. Providing a metadata file
 4. Validating files and metadata
 5. Uploading and triggering processing
+
+### Single File Upload
+
+You can upload a single file directly:
+
+```bash
+deadtrees-upload --data-dir /path/to/ortho.tif --metadata metadata.csv
+```
+
+### Template Wizard
+
+If you don't have a metadata file, the CLI will offer to create one:
+
+1. Scans your files for acquisition dates (from GeoTIFF metadata or EXIF)
+2. Asks for global values (license, platform, authors) that apply to all files
+3. Shows detected dates for each file and lets you confirm or edit them
+4. Saves a `metadata.csv` template ready for upload
 
 ### Non-Interactive Mode
 

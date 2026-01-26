@@ -130,28 +130,58 @@ def main(
 	# Check for existing upload session (resume support)
 	upload_session = check_existing_session(data_dir)
 	
-	# Step 3: Metadata file
-	if metadata is None:
-		metadata_path = select_metadata_file(data_dir)
-	else:
-		metadata_path = metadata.expanduser().resolve()
-		print_step(3, "Metadata File")
-		console.print(f"Using metadata file: {metadata_path}")
+	# Step 3-5: Metadata file, column mapping, and validation (with retry support)
+	validation_results = None
+	metadata_path = metadata.expanduser().resolve() if metadata else None
 	
-	# Read metadata file
-	try:
-		df = read_metadata_file(metadata_path)
-		console.print(f"[green]✓[/green] Loaded {len(df)} rows from metadata file")
-	except MetadataError as e:
-		console.print(f"[red]✗[/red] {e}")
-		raise typer.Exit(1)
-	
-	# Step 4: Column mapping
-	auto_mapping, missing = find_column_mapping(df)
-	column_mapping = map_columns(df, data_dir, auto_mapping, missing)
-	
-	# Step 5: Validation
-	validation_results = validate_and_match(data_dir, metadata_path, column_mapping, df)
+	while validation_results is None:
+		# Step 3: Metadata file
+		if metadata_path is None:
+			metadata_path = select_metadata_file(data_dir)
+		else:
+			print_step(3, "Metadata File")
+			console.print(f"Using metadata file: {metadata_path}")
+		
+		# Read metadata file
+		try:
+			df = read_metadata_file(metadata_path)
+			console.print(f"[green]✓[/green] Loaded {len(df)} rows from metadata file")
+		except MetadataError as e:
+			console.print(f"[red]✗[/red] Metadata error: {e}")
+			if Prompt.ask(
+				"\nWould you like to edit the file and retry?",
+				choices=["y", "n"],
+				default="y"
+			) == "y":
+				console.print("\n[dim]Fix the metadata file and press Enter when ready...[/dim]")
+				Prompt.ask("Press Enter to continue")
+				metadata_path = None  # Re-prompt for file
+				continue
+			else:
+				raise typer.Exit(1)
+		
+		# Step 4: Column mapping
+		auto_mapping, missing = find_column_mapping(df)
+		column_mapping = map_columns(df, data_dir, auto_mapping, missing)
+		
+		# Step 5: Validation
+		try:
+			validation_results = validate_and_match(data_dir, metadata_path, column_mapping, df)
+		except typer.Exit:
+			# Validation failed - offer retry
+			console.print("\n[yellow]Validation failed.[/yellow]")
+			if Prompt.ask(
+				"Would you like to fix the metadata and retry?",
+				choices=["y", "n"],
+				default="y"
+			) == "y":
+				console.print("\n[dim]Fix the metadata file and press Enter when ready...[/dim]")
+				Prompt.ask("Press Enter to continue")
+				metadata_path = None  # Re-prompt for file
+				validation_results = None  # Reset to retry
+				continue
+			else:
+				raise typer.Exit(1)
 	
 	# Step 6: Upload with session tracking
 	upload_results = do_upload(

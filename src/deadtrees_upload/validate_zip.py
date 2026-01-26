@@ -1,14 +1,69 @@
 """ZIP file validation for raw drone images."""
 
 from pathlib import Path
-from typing import Set
+from typing import Set, Tuple, Optional
 import zipfile
+from datetime import datetime
 
 from .models import ValidationResult
 
 
 # Supported image extensions in ZIP files
 IMAGE_EXTENSIONS: Set[str] = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".dng", ".raw", ".cr2", ".nef", ".arw"}
+JPEG_EXTENSIONS: Set[str] = {".jpg", ".jpeg"}
+
+
+def extract_date_from_zip(file_path: Path) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+	"""
+	Try to extract acquisition date from JPEG EXIF in a ZIP file.
+	
+	Samples JPEG images in the ZIP and extracts DateTimeOriginal from EXIF.
+	
+	Args:
+		file_path: Path to ZIP file
+	
+	Returns:
+		Tuple of (year, month, day) - any can be None if not found
+	"""
+	try:
+		import io
+		from PIL import Image
+		from PIL.ExifTags import TAGS
+		
+		with zipfile.ZipFile(file_path, 'r') as zf:
+			# Find JPEG files
+			jpeg_files = [
+				f for f in zf.namelist()
+				if not f.startswith('__MACOSX') and not f.startswith('.')
+				and Path(f).suffix.lower() in JPEG_EXTENSIONS
+			]
+			
+			if not jpeg_files:
+				return None, None, None
+			
+			# Sample first few images
+			for img_path in jpeg_files[:3]:
+				try:
+					with zf.open(img_path) as img_file:
+						img = Image.open(io.BytesIO(img_file.read()))
+						exif = img._getexif()
+						
+						if exif:
+							for tag_id, value in exif.items():
+								tag = TAGS.get(tag_id, tag_id)
+								if tag == "DateTimeOriginal":
+									# Format: "2024:07:01 10:00:00"
+									try:
+										dt = datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S")
+										return dt.year, dt.month, dt.day
+									except ValueError:
+										pass
+				except Exception:
+					continue
+			
+			return None, None, None
+	except Exception:
+		return None, None, None
 
 
 def check_image_has_gps(zf: zipfile.ZipFile, image_path: str) -> bool:

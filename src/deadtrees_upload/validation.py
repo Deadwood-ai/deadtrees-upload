@@ -16,14 +16,34 @@ class ValidationError(Exception):
 # Supported file extensions
 GEOTIFF_EXTENSIONS = {".tif", ".tiff", ".geotiff"}
 ZIP_EXTENSIONS = {".zip"}
+ALL_UPLOADABLE_EXTENSIONS = GEOTIFF_EXTENSIONS | ZIP_EXTENSIONS
 
 
-def find_uploadable_files(directory: Path) -> Tuple[List[Path], Dict[str, str]]:
+def is_uploadable_file(path: Path) -> bool:
+	"""Check if a path is a valid uploadable file (GeoTIFF or ZIP)."""
+	return path.is_file() and path.suffix.lower() in ALL_UPLOADABLE_EXTENSIONS
+
+
+def get_file_type(path: Path) -> Optional[str]:
+	"""Get the file type string for an uploadable file."""
+	suffix = path.suffix.lower()
+	if suffix in GEOTIFF_EXTENSIONS:
+		return "GeoTIFF"
+	elif suffix in ZIP_EXTENSIONS:
+		return "ZIP"
+	return None
+
+
+def find_uploadable_files(path: Path) -> Tuple[List[Path], Dict[str, str]]:
 	"""
-	Find all uploadable files in a directory.
+	Find all uploadable files in a directory or return single file.
+	
+	Supports both:
+	- Directory path: scans for all .tif/.zip files
+	- Single file path: returns just that file if valid
 	
 	Args:
-		directory: Path to search
+		path: Path to directory or single file
 	
 	Returns:
 		Tuple of (list of file paths, dict of filename -> file type)
@@ -31,24 +51,33 @@ def find_uploadable_files(directory: Path) -> Tuple[List[Path], Dict[str, str]]:
 	files = []
 	file_types = {}
 	
-	if not directory.exists():
-		raise ValidationError(f"Directory does not exist: {directory}")
+	if not path.exists():
+		raise ValidationError(f"Path does not exist: {path}")
 	
-	if not directory.is_dir():
-		raise ValidationError(f"Path is not a directory: {directory}")
+	# Handle single file
+	if path.is_file():
+		if is_uploadable_file(path):
+			files.append(path)
+			file_types[path.name] = get_file_type(path)
+		else:
+			raise ValidationError(
+				f"File type not supported: {path.suffix}. "
+				f"Supported types: .tif, .tiff, .zip"
+			)
+		return files, file_types
 	
-	for file_path in directory.iterdir():
+	# Handle directory
+	if not path.is_dir():
+		raise ValidationError(f"Path is not a file or directory: {path}")
+	
+	for file_path in path.iterdir():
 		if not file_path.is_file():
 			continue
 		
-		suffix = file_path.suffix.lower()
-		
-		if suffix in GEOTIFF_EXTENSIONS:
+		file_type = get_file_type(file_path)
+		if file_type:
 			files.append(file_path)
-			file_types[file_path.name] = "GeoTIFF"
-		elif suffix in ZIP_EXTENSIONS:
-			files.append(file_path)
-			file_types[file_path.name] = "ZIP"
+			file_types[file_path.name] = file_type
 	
 	return files, file_types
 
