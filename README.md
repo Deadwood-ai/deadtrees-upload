@@ -14,7 +14,19 @@ Batch upload datasets to [deadtrees.earth](https://deadtrees.earth).
 
 ## Installation
 
-Install from source:
+**Recommended: Use a fresh virtual environment** to avoid dependency conflicts.
+
+```bash
+# Create and activate a virtual environment
+python -m venv deadtrees-env
+source deadtrees-env/bin/activate  # Linux/Mac
+# or: deadtrees-env\Scripts\activate  # Windows
+
+# Install the package
+pip install git+https://github.com/Deadwood-ai/deadtrees-upload.git
+```
+
+Or install from source:
 
 ```bash
 git clone https://github.com/Deadwood-ai/deadtrees-upload.git
@@ -22,11 +34,21 @@ cd deadtrees-upload
 pip install -e .
 ```
 
-Or install directly from GitHub:
+### Troubleshooting: NumPy Version Conflict
+
+If you see an error like `A module compiled using NumPy 1.x cannot be run in NumPy 2.x`, this means your environment has conflicting package versions.
+
+**Solution:** Use a fresh virtual environment (see above) or:
 
 ```bash
-pip install git+https://github.com/Deadwood-ai/deadtrees-upload.git
+# Option 1: Upgrade all packages
+pip install --upgrade pandas pyarrow numpy
+
+# Option 2: Downgrade numpy
+pip install "numpy<2"
 ```
+
+This commonly happens with Anaconda environments where packages get out of sync.
 
 ## Quick Start
 
