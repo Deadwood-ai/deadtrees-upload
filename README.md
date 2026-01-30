@@ -15,6 +15,48 @@ Batch upload datasets to [deadtrees.earth](https://deadtrees.earth).
 - **Automatic date extraction** - Detects acquisition dates from GeoTIFF metadata and EXIF
 - **Automatic processing** - Triggers the processing pipeline after upload
 
+## How It Works
+
+The CLI guides you through a 6-step process:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    DeadTrees Upload Workflow                     │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Step 1: Authentication                                          │
+│  └─> Login with your deadtrees.earth email/password              │
+│                                                                  │
+│  Step 2: Data Directory                                          │
+│  └─> Point to a folder with .tif/.zip files (or a single file)   │
+│                                                                  │
+│  Step 3: Metadata File                                           │
+│  └─> Provide a CSV/Excel with file info, or use Template Wizard  │
+│                                                                  │
+│  Step 4: Column Mapping                                          │
+│  └─> Map your CSV columns to required fields (auto-detected)     │
+│                                                                  │
+│  Step 5: Validation                                              │
+│  └─> Validates files + metadata before upload                    │
+│                                                                  │
+│  Step 6: Upload & Process                                        │
+│  └─> Chunked upload with progress bar, then triggers processing  │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### What Happens After Upload?
+
+Once files are uploaded, the CLI automatically triggers the appropriate processing pipeline:
+
+| File Type | Processing Pipeline |
+|-----------|---------------------|
+| **GeoTIFF** (`.tif`) | `geotiff` → `cog` → `thumbnail` → `metadata` → `deadwood` → `treecover` |
+| **Raw Images** (`.zip`) | `odm_processing` → (same as GeoTIFF after ortho generation) |
+
+- **GeoTIFFs** are converted to Cloud-Optimized GeoTIFFs (COGs), thumbnails are generated, and AI segmentation runs
+- **ZIP files** containing raw drone images are processed through OpenDroneMap (ODM) to generate orthomosaics first
+
 ## Installation
 
 **Recommended: Use a fresh virtual environment** to avoid dependency conflicts.
@@ -80,12 +122,63 @@ deadtrees-upload --data-dir /path/to/ortho.tif --metadata metadata.csv
 
 ### Template Wizard
 
-If you don't have a metadata file, the CLI will offer to create one:
+If you don't have a metadata file, the CLI will offer to create one automatically:
 
-1. Scans your files for acquisition dates (from GeoTIFF metadata or EXIF)
-2. Asks for global values (license, platform, authors) that apply to all files
-3. Shows detected dates for each file and lets you confirm or edit them
-4. Saves a `metadata.csv` template ready for upload
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   Template Creation Wizard                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. File Scanning                                               │
+│     └─> Finds all .tif and .zip files in your directory         │
+│                                                                 │
+│  2. Date Detection                                              │
+│     └─> Extracts dates from:                                    │
+│         • GeoTIFF metadata (TIFFTAG_DATETIME)                   │
+│         • JPEG EXIF in ZIPs (DateTimeOriginal)                  │
+│                                                                 │
+│  3. Date Review Table                                           │
+│     ┌──────────────────────┬──────┬───────────────┬──────────┐  │
+│     │ File                 │ Type │ Detected Date │ Status   │  │
+│     ├──────────────────────┼──────┼───────────────┼──────────┤  │
+│     │ ortho_2024.tif       │ TIF  │ 2024-06-15    │ ✓ Found  │  │
+│     │ raw_images.zip       │ ZIP  │ 2024-07-20    │ ✓ Found  │  │
+│     │ old_survey.tif       │ TIF  │ -             │ ⚠ None   │  │
+│     └──────────────────────┴──────┴───────────────┴──────────┘  │
+│                                                                 │
+│  4. Global Values (applied to all files)                        │
+│     └─> License, Platform, Authors, Data Access                 │
+│                                                                 │
+│  5. Date Confirmation                                           │
+│     └─> Confirm or edit each file's date (year is required)     │
+│                                                                 │
+│  6. Save Template                                               │
+│     └─> Saves metadata.csv ready for upload                     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Example session:**
+
+```
+Found 6 files
+
+              Detected Acquisition Dates
+┌────────────────────────────────┬──────┬───────────────┬──────────┐
+│ File                           │ Type │ Detected Date │ Status   │
+├────────────────────────────────┼──────┼───────────────┼──────────┤
+│ 20160215_CA_Marin_Hill_88.zip  │ ZIP  │ 2016-02-15    │ ✓ Found  │
+│ 20160213_CA_Marin_Brickyard.zip│ ZIP  │ 2016-02-13    │ ✓ Found  │
+└────────────────────────────────┴──────┴───────────────┴──────────┘
+
+Enter values that apply to ALL files:
+License [CC BY]: CC BY
+Platform [drone]: drone
+Authors: Research Team
+Data access [public]: public
+
+✓ Template saved to: /path/to/data/metadata.csv
+```
 
 ### Non-Interactive Mode
 
@@ -161,9 +254,9 @@ A template is included in `templates/metadata_template.csv`.
 ### GeoTIFF Files (Orthomosaics)
 - Extensions: `.tif`, `.tiff`, `.geotiff`
 - **Requirements:**
-  - Valid Coordinate Reference System (CRS)
+  - Valid Coordinate Reference System (CRS) - `LOCAL_CS` and engineering CRS are rejected
   - At least 3 bands (RGB)
-  - Proper georeferencing
+  - Proper georeferencing (transform must not be identity)
 
 ### ZIP Files (Raw Drone Images)
 - Extension: `.zip`
@@ -171,7 +264,48 @@ A template is included in `templates/metadata_template.csv`.
 - Supported image formats: JPEG, PNG, TIFF, DNG, RAW, CR2, NEF, ARW
 - **Recommendation:** Images should have GPS coordinates in EXIF for best ODM results
 
-## Resume Interrupted Uploads
+## Validation Details
+
+Before upload, the CLI validates each file:
+
+### GeoTIFF Validation
+
+| Check | Description | Error If Failed |
+|-------|-------------|-----------------|
+| CRS | Must have a valid coordinate reference system | `Invalid CRS: LOCAL_CS not supported` |
+| Bands | Must have at least 3 bands (RGB) | `Insufficient bands: found 1, need 3+` |
+| Georeferencing | Must have proper transform (not identity) | `Missing georeferencing` |
+
+### ZIP Validation
+
+| Check | Description | Warning If Failed |
+|-------|-------------|-------------------|
+| Image count | Must contain image files | `No images found in ZIP` |
+| GPS data | Sample images checked for GPS EXIF | `⚠ No GPS data - ODM may fail` |
+
+**Note:** ZIP validation issues are warnings, not errors. You can still upload, but ODM processing may fail without GPS data.
+
+## Error Handling & Retry
+
+The CLI is designed to be fault-tolerant:
+
+### Metadata Errors
+
+If there's an error in your metadata file (missing required fields, invalid values), the CLI will:
+1. Show you exactly what's wrong
+2. Ask if you want to fix the file and retry
+3. Let you edit the file externally (in any editor)
+4. Press Enter to re-read the file without restarting the CLI
+
+```
+✗ Validation error: Missing required field 'acquisition_year' for file ortho.tif
+
+Would you like to fix the metadata and retry? [y/n]: y
+
+Fix the metadata file and press Enter when ready...
+```
+
+### Resume Interrupted Uploads
 
 If an upload is interrupted (network failure, crash, etc.), the CLI automatically saves progress to `.deadtrees-upload-session.json` in your data directory. 
 
@@ -186,6 +320,12 @@ On the next run, you'll be prompted to resume:
 └────────────────────────────────────────┘
 Resume previous session? [y/n]:
 ```
+
+### Duplicate Detection
+
+The CLI tracks uploaded files by computing a hash of each file. If you try to upload the same file again:
+- Within the same session: Automatically skipped
+- Across sessions: Warned and prompted to skip or re-upload
 
 ## CLI Reference
 

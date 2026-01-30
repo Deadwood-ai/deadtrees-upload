@@ -144,7 +144,7 @@ def ask_global_values() -> Dict[str, str]:
 	Ask for values that apply to all files.
 	
 	Returns:
-		Dict with license, platform, authors, data_access
+		Dict with license, platform, authors, data_access, and optional fields
 	"""
 	console.print("\n[bold]Enter values that apply to ALL files:[/bold]\n")
 	
@@ -166,12 +166,25 @@ def ask_global_values() -> Dict[str, str]:
 	console.print(f"  Available access levels: {', '.join(access_options)}")
 	access_val = Prompt.ask("  Data access", default="public")
 	
-	return {
+	# Optional fields
+	console.print("\n[dim]Optional fields (press Enter to skip):[/dim]")
+	additional_info = Prompt.ask("  Additional information", default="")
+	citation_doi = Prompt.ask("  Citation DOI", default="")
+	
+	result = {
 		"license": license_val,
 		"platform": platform_val,
 		"authors": authors_val,
 		"data_access": access_val,
 	}
+	
+	# Only add optional fields if they have values
+	if additional_info.strip():
+		result["additional_information"] = additional_info.strip()
+	if citation_doi.strip():
+		result["citation_doi"] = citation_doi.strip()
+	
+	return result
 
 
 def create_template_dataframe(
@@ -200,9 +213,14 @@ def create_template_dataframe(
 			"acquisition_month": info.confirmed_month,
 			"acquisition_day": info.confirmed_day,
 			"data_access": global_values["data_access"],
-			"additional_information": "",
-			"citation_doi": "",
 		}
+		
+		# Only add optional columns if they have values
+		if "additional_information" in global_values:
+			row["additional_information"] = global_values["additional_information"]
+		if "citation_doi" in global_values:
+			row["citation_doi"] = global_values["citation_doi"]
+		
 		rows.append(row)
 	
 	return pd.DataFrame(rows)
