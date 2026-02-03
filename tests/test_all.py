@@ -117,6 +117,49 @@ class TestModels:
 			)
 			assert metadata.license == LicenseEnum.cc_by
 	
+	def test_license_normalization_aliases(self):
+		from deadtrees_upload.models import FileMetadata, LicenseEnum, PlatformEnum
+		
+		cases = {
+			"CC BY 4.0": LicenseEnum.cc_by,
+			"cc-by-4.0": LicenseEnum.cc_by,
+			"CC BY-SA 4.0": LicenseEnum.cc_by_sa,
+			"cc-by-nc-sa-4.0": LicenseEnum.cc_by_nc_sa,
+			"cc-by-nc-4.0": LicenseEnum.cc_by_nc,
+			"MIT License": LicenseEnum.mit,
+		}
+		
+		for license_str, expected in cases.items():
+			metadata = FileMetadata(
+				filename="test.tif",
+				license=license_str,
+				platform=PlatformEnum.drone,
+				authors=["Test"],
+				acquisition_year=2024,
+			)
+			assert metadata.license == expected
+	
+	def test_platform_normalization_aliases(self):
+		from deadtrees_upload.models import FileMetadata, PlatformEnum, LicenseEnum
+		
+		cases = {
+			"UAV": PlatformEnum.drone,
+			"uavs": PlatformEnum.drone,
+			"aircraft": PlatformEnum.airborne,
+			"airbone": PlatformEnum.airborne,
+			"Airplane": PlatformEnum.airborne,
+		}
+		
+		for platform_str, expected in cases.items():
+			metadata = FileMetadata(
+				filename="test.tif",
+				license=LicenseEnum.cc_by,
+				platform=platform_str,
+				authors=["Test"],
+				acquisition_year=2024,
+			)
+			assert metadata.platform == expected
+	
 	def test_validation_result(self):
 		from deadtrees_upload.models import ValidationResult
 		
@@ -461,6 +504,89 @@ class TestAuth:
 		
 		error = AuthError("Test error")
 		assert str(error) == "Test error"
+	
+	def test_save_and_load_auth_session(self, tmp_path, monkeypatch):
+		from deadtrees_upload.auth import AuthSession, save_auth_session, load_auth_session, get_auth_session_path
+		
+		monkeypatch.setenv("DEADTREES_UPLOAD_CACHE_DIR", str(tmp_path))
+		api_url = "http://api.example.com"
+		
+		session = AuthSession(
+			access_token="token",
+			refresh_token="refresh",
+			user_id="user123",
+			expires_at=time.time() + 3600,
+			supabase_url="http://supabase",
+			supabase_key="key",
+		)
+		
+		save_auth_session(session, api_url)
+		loaded = load_auth_session(api_url)
+		
+		assert loaded is not None
+		assert loaded.access_token == "token"
+		assert loaded.refresh_token == "refresh"
+		assert loaded.user_id == "user123"
+		assert get_auth_session_path(api_url).exists()
+	
+	def test_get_cached_session_refreshes_expired(self, tmp_path, monkeypatch):
+		from deadtrees_upload.auth import AuthSession, save_auth_session, get_cached_session, load_auth_session
+		
+		monkeypatch.setenv("DEADTREES_UPLOAD_CACHE_DIR", str(tmp_path))
+		api_url = "http://api.example.com"
+		
+		session = AuthSession(
+			access_token="old_token",
+			refresh_token="refresh",
+			user_id="user123",
+			expires_at=time.time() - 10,
+			supabase_url="http://supabase",
+			supabase_key="key",
+		)
+		save_auth_session(session, api_url)
+		
+		called = {"refreshed": False}
+		
+		def fake_refresh(self):
+			called["refreshed"] = True
+			self.access_token = "new_token"
+			self.refresh_token = "new_refresh"
+			self.expires_at = time.time() + 3600
+		
+		monkeypatch.setattr(AuthSession, "refresh", fake_refresh, raising=True)
+		
+		cached = get_cached_session(api_url)
+		assert cached is not None
+		assert cached.access_token == "new_token"
+		assert called["refreshed"]
+		
+		loaded = load_auth_session(api_url)
+		assert loaded is not None
+		assert loaded.access_token == "new_token"
+	
+	def test_get_cached_session_returns_none_on_refresh_error(self, tmp_path, monkeypatch):
+		from deadtrees_upload.auth import AuthSession, save_auth_session, get_cached_session, AuthError
+		
+		monkeypatch.setenv("DEADTREES_UPLOAD_CACHE_DIR", str(tmp_path))
+		api_url = "http://api.example.com"
+		
+		session = AuthSession(
+			access_token="old_token",
+			refresh_token="refresh",
+			user_id="user123",
+			expires_at=time.time() - 10,
+			supabase_url="http://supabase",
+			supabase_key="key",
+		)
+		save_auth_session(session, api_url)
+		
+		def fake_refresh(self):
+			raise AuthError("refresh failed")
+		
+		monkeypatch.setattr(AuthSession, "refresh", fake_refresh, raising=True)
+		
+		cached = get_cached_session(api_url)
+		assert cached is None
 
 
 # =============================================================================

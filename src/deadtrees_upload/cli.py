@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from . import __version__
-from .auth import create_auth_session, AuthError
+from .auth import create_auth_session, AuthError, save_auth_session
 from .metadata import read_metadata_file, find_column_mapping, MetadataError
 from .validation import find_uploadable_files, ValidationError
 from .dedup import get_session_file_path
@@ -102,6 +102,10 @@ def main(
 				)
 				console.print(f"[green]✓[/green] Authenticated as [bold]{email}[/bold]")
 				console.print("[dim]Token will auto-refresh during long uploads[/dim]")
+				try:
+					save_auth_session(auth_session, api_url)
+				except Exception:
+					console.print("[yellow]![/yellow] Could not persist credentials")
 			except AuthError as e:
 				console.print(f"[red]✗[/red] Authentication failed: {e}")
 				raise typer.Exit(1)

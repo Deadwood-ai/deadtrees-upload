@@ -8,7 +8,13 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 
-from .auth import create_auth_session, AuthError, AuthSession
+from .auth import (
+	create_auth_session,
+	AuthError,
+	AuthSession,
+	get_cached_session,
+	save_auth_session,
+)
 from .metadata import (
 	suggest_column_matches,
 	get_valid_values_help,
@@ -40,6 +46,11 @@ def authenticate(api_url: str) -> AuthSession:
 	"""Prompt for credentials and authenticate with session support."""
 	print_step(1, "Authentication")
 	
+	cached_session = get_cached_session(api_url)
+	if cached_session:
+		console.print("[green]✓[/green] Using stored credentials")
+		return cached_session
+	
 	supabase_url, supabase_key = get_supabase_config(api_url)
 	if "localhost" in api_url:
 		console.print("[dim]Using local Supabase for authentication[/dim]")
@@ -57,6 +68,10 @@ def authenticate(api_url: str) -> AuthSession:
 			)
 			console.print(f"[green]✓[/green] Authenticated as [bold]{email}[/bold]")
 			console.print("[dim]Token will auto-refresh during long uploads[/dim]")
+			try:
+				save_auth_session(session, api_url)
+			except Exception:
+				console.print("[yellow]![/yellow] Could not persist credentials")
 			return session
 		except AuthError as e:
 			console.print(f"[red]✗[/red] Authentication failed: {e}")

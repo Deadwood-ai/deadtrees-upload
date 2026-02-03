@@ -3,6 +3,9 @@
 from typing import Optional, Tuple
 from dataclasses import dataclass
 import time
+import json
+import os
+from pathlib import Path
 import httpx
 from rich.console import Console
 
@@ -66,6 +69,93 @@ class AuthSession:
 		if self.is_expired():
 			self.refresh()
 		return self.access_token
+
+
+def _get_cache_dir() -> Path:
+	"""Get cache directory for storing auth sessions."""
+	override = os.getenv("DEADTREES_UPLOAD_CACHE_DIR")
+	if override:
+		return Path(override).expanduser().resolve()
+	
+	xdg_cache = os.getenv("XDG_CACHE_HOME")
+	if xdg_cache:
+		return Path(xdg_cache).expanduser().resolve() / "deadtrees_upload"
+	
+	return Path.home() / ".cache" / "deadtrees_upload"
+
+
+def _sanitize_api_url(api_url: str) -> str:
+	"""Convert API URL into a safe filename fragment."""
+	return "".join(char if char.isalnum() else "_" for char in api_url.lower())
+
+
+def get_auth_session_path(api_url: str) -> Path:
+	"""Get path for cached auth session file."""
+	cache_dir = _get_cache_dir()
+	return cache_dir / f"auth_session_{_sanitize_api_url(api_url)}.json"
+
+
+def save_auth_session(session: AuthSession, api_url: str) -> None:
+	"""Persist auth session to disk."""
+	path = get_auth_session_path(api_url)
+	path.parent.mkdir(parents=True, exist_ok=True)
+	
+	payload = {
+		"access_token": session.access_token,
+		"refresh_token": session.refresh_token,
+		"user_id": session.user_id,
+		"expires_at": session.expires_at,
+		"supabase_url": session.supabase_url,
+		"supabase_key": session.supabase_key,
+	}
+	
+	path.write_text(json.dumps(payload))
+	try:
+		os.chmod(path, 0o600)
+	except OSError:
+		pass
+
+
+def load_auth_session(api_url: str) -> Optional[AuthSession]:
+	"""Load auth session from disk, if present."""
+	path = get_auth_session_path(api_url)
+	if not path.exists():
+		return None
+	
+	try:
+		payload = json.loads(path.read_text())
+		return AuthSession(
+			access_token=payload["access_token"],
+			refresh_token=payload.get("refresh_token", ""),
+			user_id=payload.get("user_id", ""),
+			expires_at=float(payload["expires_at"]),
+			supabase_url=payload["supabase_url"],
+			supabase_key=payload["supabase_key"],
+		)
+	except Exception:
+		return None
+
+
+def clear_auth_session(api_url: str) -> None:
+	"""Remove cached auth session, if it exists."""
+	path = get_auth_session_path(api_url)
+	path.unlink(missing_ok=True)
+
+
+def get_cached_session(api_url: str, refresh_if_expired: bool = True) -> Optional[AuthSession]:
+	"""Load cached session and refresh if expired."""
+	session = load_auth_session(api_url)
+	if not session:
+		return None
+	
+	if refresh_if_expired and session.is_expired():
+		try:
+			session.refresh()
+			save_auth_session(session, api_url)
+		except AuthError:
+			return None
+	
+	return session
 
 
 def login(email: str, password: str, api_url: str) -> Tuple[str, str]:

@@ -9,6 +9,7 @@ Batch upload datasets to [deadtrees.earth](https://deadtrees.earth).
 - **Single file support** - Upload individual files directly (not just directories)
 - **Template wizard** - Auto-create metadata files with date detection from files
 - **Auto token refresh** - Handles long-running uploads without re-authentication
+- **Credential persistence** - Reuses cached sessions between runs
 - **Resume support** - Automatically resume interrupted uploads
 - **Duplicate detection** - Prevents uploading the same file twice
 - **File validation** - Validates GeoTIFFs (CRS, bands) and ZIPs (GPS data) before upload
@@ -25,7 +26,7 @@ The CLI guides you through a 6-step process:
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  Step 1: Authentication                                          │
-│  └─> Login with your deadtrees.earth email/password              │
+│  └─> Uses cached session or prompts for login                    │
 │                                                                  │
 │  Step 2: Data Directory                                          │
 │  └─> Point to a folder with .tif/.zip files (or a single file)   │
@@ -207,6 +208,14 @@ For testing against a local or staging environment:
 deadtrees-upload --api-url http://localhost:8080/api/v1/
 ```
 
+## Credential Cache
+
+The CLI stores a cached auth session to skip repeated logins:
+
+- Default path: `~/.cache/deadtrees_upload/auth_session_<api>.json`
+- Override location with `DEADTREES_UPLOAD_CACHE_DIR`
+- Delete the file to force re-login
+
 ## Metadata File Format
 
 Create a CSV or Excel file with the following columns:
@@ -246,6 +255,10 @@ raw_images.zip,CC BY-SA,drone,Research Team,2024-07,public,Raw drone images for 
 - Year only: `2024`
 
 Alternatively, you can use separate `acquisition_year`, `acquisition_month`, `acquisition_day` columns.
+
+Aliases are accepted for common variations:
+- Platform: `UAV`, `aircraft`, `airplane`, `airbone`, `aerial`
+- License: `CC BY 4.0`, `CC-BY`, `CC BY-SA 4.0`, `CC BY-NC-SA 4.0`, `CC BY-NC 4.0`, `MIT License`
 
 A template is included in `templates/metadata_template.csv`.
 

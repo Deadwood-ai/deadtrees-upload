@@ -35,6 +35,41 @@ class UploadType(str, Enum):
 	raw_images_zip = "raw_images_zip"
 
 
+def _normalize_token(value: str) -> str:
+	"""Normalize a token for alias matching."""
+	return (
+		value.strip()
+		.lower()
+		.replace(" ", "")
+		.replace("-", "")
+		.replace("_", "")
+		.replace(".", "")
+	)
+
+
+LICENSE_ALIASES = {
+	"ccby40": LicenseEnum.cc_by,
+	"ccby4": LicenseEnum.cc_by,
+	"ccbysa40": LicenseEnum.cc_by_sa,
+	"ccbysa4": LicenseEnum.cc_by_sa,
+	"ccbyncsa40": LicenseEnum.cc_by_nc_sa,
+	"ccbyncsa4": LicenseEnum.cc_by_nc_sa,
+	"ccbync40": LicenseEnum.cc_by_nc,
+	"ccbync4": LicenseEnum.cc_by_nc,
+	"mitlicense": LicenseEnum.mit,
+}
+
+
+PLATFORM_ALIASES = {
+	"uav": PlatformEnum.drone,
+	"uavs": PlatformEnum.drone,
+	"aircraft": PlatformEnum.airborne,
+	"airplane": PlatformEnum.airborne,
+	"airbone": PlatformEnum.airborne,
+	"aerial": PlatformEnum.airborne,
+}
+
+
 class FileMetadata(BaseModel):
 	"""Metadata for a single file to upload."""
 	
@@ -69,6 +104,9 @@ class FileMetadata(BaseModel):
 	def normalize_license(cls, v):
 		"""Normalize license string to enum value."""
 		if isinstance(v, str):
+			alias_key = _normalize_token(v)
+			if alias_key in LICENSE_ALIASES:
+				return LICENSE_ALIASES[alias_key]
 			# Try exact match first
 			v_upper = v.upper().strip()
 			for license_type in LicenseEnum:
@@ -86,6 +124,9 @@ class FileMetadata(BaseModel):
 	def normalize_platform(cls, v):
 		"""Normalize platform string to enum value."""
 		if isinstance(v, str):
+			alias_key = _normalize_token(v)
+			if alias_key in PLATFORM_ALIASES:
+				return PLATFORM_ALIASES[alias_key]
 			return v.lower().strip()
 		return v
 	
