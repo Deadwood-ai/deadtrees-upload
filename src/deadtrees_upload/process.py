@@ -49,7 +49,7 @@ def trigger_processing(
 	upload_type: UploadType,
 	token: Union[str, AuthSession],
 	api_url: str,
-	priority: int = 4,
+	priority: int = 2,
 ) -> bool:
 	"""
 	Trigger processing pipeline for an uploaded dataset.
@@ -59,7 +59,7 @@ def trigger_processing(
 		upload_type: Type of upload (geotiff or raw_images_zip)
 		token: Authentication token or AuthSession
 		api_url: Base API URL
-		priority: Processing priority (1=highest, 4=default)
+		priority: Processing priority (1=highest, 2=default)
 	
 	Returns:
 		True if processing was triggered successfully
