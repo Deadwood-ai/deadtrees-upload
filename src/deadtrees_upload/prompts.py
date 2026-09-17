@@ -27,19 +27,14 @@ from .display import print_step
 
 console = Console()
 
-# Supabase configuration
-PROD_SUPABASE_URL = "https://supabase.deadtrees.earth"
-PROD_SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJyb2xlIjogImFub24iLAogICJpc3MiOiAic3VwYWJhc2UiLAogICJpYXQiOiAxNzQwODcwMDAwLAogICJleHAiOiAxODk4NjM2NDAwCn0.A3HdTofLNcrRrtDDbDAP9kRBobxXqnUKB6IYHvM6da4"
-
-LOCAL_SUPABASE_URL = "http://localhost:54321"
-LOCAL_SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+# Compatibility exports; endpoint configuration belongs to config.py.
+from .config import PROD_SUPABASE_URL, PROD_SUPABASE_KEY
 
 
 def get_supabase_config(api_url: str) -> tuple[str, str]:
-	"""Get Supabase URL and key based on API URL."""
-	if "localhost" in api_url or "127.0.0.1" in api_url:
-		return LOCAL_SUPABASE_URL, LOCAL_SUPABASE_KEY
-	return PROD_SUPABASE_URL, PROD_SUPABASE_KEY
+	"""Resolve an explicitly selected authentication target."""
+	from .config import supabase_config
+	return supabase_config(api_url)
 
 
 def authenticate(api_url: str) -> AuthSession:
@@ -276,6 +271,10 @@ def map_columns(df, data_dir: Path, auto_mapping: dict, missing: List[str]) -> d
 
 def check_existing_session(data_dir: Path) -> Optional[UploadSessionState]:
 	"""Check for existing upload session and offer to resume."""
+	directory = data_dir if data_dir.is_dir() else data_dir.parent
+	if any((directory / name).exists() for name in (".deadtrees-upload-agent.json", ".deadtrees-upload-agent.lock")):
+		console.print("[red]Agent receipt or lock exists. Use the unattended workflow with --resume; reconcile unresolved outcomes before switching workflows.[/red]")
+		raise typer.Exit(5)
 	session = find_existing_session(data_dir)
 	
 	if session and not session.is_complete:

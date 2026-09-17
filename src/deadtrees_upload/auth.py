@@ -1,7 +1,7 @@
 """Authentication module for Supabase login."""
 
 from typing import Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 import json
 import os
@@ -20,12 +20,13 @@ class AuthError(Exception):
 @dataclass
 class AuthSession:
 	"""Authentication session with token refresh support."""
-	access_token: str
-	refresh_token: str
+	access_token: str = field(repr=False)
+	refresh_token: str = field(repr=False)
 	user_id: str
 	expires_at: float  # Unix timestamp
 	supabase_url: str
-	supabase_key: str
+	supabase_key: str = field(repr=False)
+	cache_api_url: Optional[str] = field(default=None, repr=False)
 	
 	def is_expired(self, buffer_seconds: int = 300) -> bool:
 		"""Check if token is expired or will expire soon."""
@@ -56,6 +57,11 @@ class AuthSession:
 				# Supabase tokens typically expire in 3600 seconds (1 hour)
 				expires_in = data.get("expires_in", 3600)
 				self.expires_at = time.time() + expires_in
+				if self.cache_api_url:
+					try:
+						save_auth_session(self, self.cache_api_url)
+					except OSError:
+						Console(stderr=True).print("[yellow]Refreshed session is usable in memory, but its cache could not be saved. Run login again after this command.[/yellow]")
 				
 		except httpx.ConnectError:
 			raise AuthError(f"Could not connect to Supabase for token refresh")
@@ -92,13 +98,13 @@ def _sanitize_api_url(api_url: str) -> str:
 def get_auth_session_path(api_url: str) -> Path:
 	"""Get path for cached auth session file."""
 	cache_dir = _get_cache_dir()
-	return cache_dir / f"auth_session_{_sanitize_api_url(api_url)}.json"
+	return cache_dir / f"auth_session_{_sanitize_api_url(api_url.rstrip('/'))}.json"
 
 
 def save_auth_session(session: AuthSession, api_url: str) -> None:
 	"""Persist auth session to disk."""
 	path = get_auth_session_path(api_url)
-	path.parent.mkdir(parents=True, exist_ok=True)
+	path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 	
 	payload = {
 		"access_token": session.access_token,
@@ -109,18 +115,19 @@ def save_auth_session(session: AuthSession, api_url: str) -> None:
 		"supabase_key": session.supabase_key,
 	}
 	
-	path.write_text(json.dumps(payload))
-	try:
-		os.chmod(path, 0o600)
-	except OSError:
-		pass
+	from .state import atomic_json
+	atomic_json(path, payload)
 
 
 def load_auth_session(api_url: str) -> Optional[AuthSession]:
 	"""Load auth session from disk, if present."""
 	path = get_auth_session_path(api_url)
 	if not path.exists():
-		return None
+		# Read old wizard caches without moving or overwriting credentials.
+		legacy = _get_cache_dir() / f"auth_session_{_sanitize_api_url(api_url.rstrip('/') + '/')}.json"
+		if not legacy.exists():
+			return None
+		path = legacy
 	
 	try:
 		payload = json.loads(path.read_text())
@@ -131,15 +138,18 @@ def load_auth_session(api_url: str) -> Optional[AuthSession]:
 			expires_at=float(payload["expires_at"]),
 			supabase_url=payload["supabase_url"],
 			supabase_key=payload["supabase_key"],
+			cache_api_url=api_url,
 		)
 	except Exception:
 		return None
 
 
 def clear_auth_session(api_url: str) -> None:
-	"""Remove cached auth session, if it exists."""
+	"""Remove canonical and legacy cached sessions for this target."""
 	path = get_auth_session_path(api_url)
 	path.unlink(missing_ok=True)
+	legacy = _get_cache_dir() / f"auth_session_{_sanitize_api_url(api_url.rstrip('/') + '/')}.json"
+	legacy.unlink(missing_ok=True)
 
 
 def get_cached_session(api_url: str, refresh_if_expired: bool = True) -> Optional[AuthSession]:
@@ -151,7 +161,6 @@ def get_cached_session(api_url: str, refresh_if_expired: bool = True) -> Optiona
 	if refresh_if_expired and session.is_expired():
 		try:
 			session.refresh()
-			save_auth_session(session, api_url)
 		except AuthError:
 			return None
 	

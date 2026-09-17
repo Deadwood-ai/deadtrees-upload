@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Optional, List
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class LicenseEnum(str, Enum):
@@ -76,7 +76,7 @@ class FileMetadata(BaseModel):
 	filename: str = Field(..., description="Name of the file (must match actual file)")
 	license: LicenseEnum = Field(..., description="License for the dataset")
 	platform: PlatformEnum = Field(..., description="Platform used for capture")
-	authors: List[str] = Field(..., description="List of author names")
+	authors: List[str] = Field(..., min_length=1, description="List of author names")
 	acquisition_year: int = Field(..., ge=1980, le=2099, description="Year of data acquisition (required)")
 	
 	# Optional fields
@@ -99,6 +99,17 @@ class FileMetadata(BaseModel):
 			return [author.strip() for author in v.split(";") if author.strip()]
 		return v
 	
+	@model_validator(mode="after")
+	def validate_calendar(self):
+		from datetime import date
+		if self.acquisition_day is not None:
+			if self.acquisition_month is None:
+				raise ValueError("acquisition_day requires acquisition_month")
+			date(self.acquisition_year, self.acquisition_month, self.acquisition_day)
+		if not self.filename.strip() or Path(self.filename).name != self.filename:
+			raise ValueError("filename must be a non-empty basename")
+		return self
+
 	@field_validator("license", mode="before")
 	@classmethod
 	def normalize_license(cls, v):
@@ -158,6 +169,8 @@ class UploadResult(BaseModel):
 	success: bool
 	dataset_id: Optional[int] = None
 	error: Optional[str] = None
+	upload_id: Optional[str] = None
+	outcome_unknown: bool = False
 
 
 class UploadSession(BaseModel):

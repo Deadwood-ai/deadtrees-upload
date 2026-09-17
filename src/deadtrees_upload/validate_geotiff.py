@@ -44,6 +44,10 @@ def extract_date_from_geotiff(file_path: Path) -> Tuple[Optional[int], Optional[
 					# Try ISO format
 					if 'T' in clean_str:
 						dt = datetime.strptime(clean_str, "%Y-%m-%dT%H:%M:%S")
+					elif ":" in clean_str[:10]:
+						# TIFF DateTime uses YYYY:MM:DD HH:MM:SS. This is only
+						# an embedded candidate, not confirmed capture provenance.
+						dt = datetime.strptime(clean_str, "%Y:%m:%d %H:%M:%S")
 					else:
 						dt = datetime.strptime(clean_str, "%Y-%m-%d")
 					
@@ -106,7 +110,7 @@ def validate_geotiff(file_path: Path) -> Tuple[ValidationResult, Tuple[Optional[
 				if has_transform and (origin[0] != 0 or origin[1] != 0):
 					errors.append(
 						f"File has coordinates (origin: {origin[0]:.1f}, {origin[1]:.1f}) but no CRS definition. "
-						"Please re-export with embedded CRS or include a .prj file."
+						"Please provide a GeoTIFF with embedded CRS; sidecars are not uploaded."
 					)
 				else:
 					errors.append(
@@ -133,10 +137,18 @@ def validate_geotiff(file_path: Path) -> Tuple[ValidationResult, Tuple[Optional[
 					"Single-band rasters (grayscale, elevation, indices) are not supported."
 				)
 			elif src.count > 4:
-				warnings.append(
-					f"File has {src.count} bands. Only first 3 (RGB) will be used for processing."
-				)
-			
+				errors.append("More than four bands: multispectral or mixed input is outside this RGB upload workflow")
+			elif tuple(c.name for c in src.colorinterp[:3]) != ("red", "green", "blue"):
+				errors.append("First three bands are not identified as RGB; confirm the sensor/band meaning before uploading")
+			if src.count == 4 and src.colorinterp[3].name != "alpha":
+				errors.append("Fourth band is not identified as alpha; mixed/multispectral input needs clarification")
+			if src.transform == rasterio.transform.Affine.identity():
+				errors.append("Missing georeferencing transform")
+			if any(dtype != "uint8" for dtype in src.dtypes):
+				warnings.append("Non-8-bit data: processing may require conversion; local validation does not establish model compatibility")
+			# Decode a bounded sample so a readable header alone cannot establish validity.
+			src.read(window=rasterio.windows.Window(0, 0, min(src.width, 256), min(src.height, 256)))
+
 			# Check for valid bounds
 			bounds = src.bounds
 			if bounds.left == bounds.right or bounds.top == bounds.bottom:
@@ -153,13 +165,10 @@ def validate_geotiff(file_path: Path) -> Tuple[ValidationResult, Tuple[Optional[
 			warnings.append(f"Extracted date from file: {extracted_date[0]}-{extracted_date[1] or '??'}-{extracted_date[2] or '??'}")
 	
 	except ImportError:
-		warnings.append("rasterio not available - skipping detailed validation")
+		errors.append("rasterio is required for validation; reinstall deadtrees-upload")
 	except Exception as e:
-		if "rasterio" in str(type(e).__module__):
-			errors.append(f"Cannot read GeoTIFF: {str(e)}")
-		else:
-			warnings.append(f"Validation warning: {str(e)}")
-	
+		errors.append(f"Cannot validate GeoTIFF: {str(e)}")
+
 	return ValidationResult(
 		filename=file_path.name,
 		is_valid=len(errors) == 0,

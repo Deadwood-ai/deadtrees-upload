@@ -61,6 +61,10 @@ packages = ["src/deadtrees_upload"]
 include = [
     "/src",
     "/templates",
+    "/README.md",
+    "/LICENSE",
+    "/tests",
+    "/.agents",
 ]
 
 [tool.pytest.ini_options]

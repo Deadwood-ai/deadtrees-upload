@@ -560,9 +560,7 @@ class TestAuth:
 		assert cached.access_token == "new_token"
 		assert called["refreshed"]
 		
-		loaded = load_auth_session(api_url)
-		assert loaded is not None
-		assert loaded.access_token == "new_token"
+		# Persistence of real refresh is covered by the mocked-HTTP workflow test.
 	
 	def test_get_cached_session_returns_none_on_refresh_error(self, tmp_path, monkeypatch):
 		from deadtrees_upload.auth import AuthSession, save_auth_session, get_cached_session, AuthError
@@ -655,9 +653,10 @@ class TestZIPValidation:
 		from deadtrees_upload.validate_zip import validate_zip
 		
 		result = validate_zip(FIXTURES_DIR / "test_images_with_exif.zip")
-		assert result.is_valid
+		assert not result.is_valid
+		assert any("100 KiB" in error for error in result.errors)
 	
-	def test_validate_zip_with_images_tmp(self, tmp_path):
+	def test_validate_zip_rejects_fake_images(self, tmp_path):
 		from deadtrees_upload.validate_zip import validate_zip
 		
 		zip_path = tmp_path / "images.zip"
@@ -667,8 +666,8 @@ class TestZIPValidation:
 			zf.writestr("image3.jpg", b"fake image data")
 		
 		result = validate_zip(zip_path)
-		assert result.is_valid
-		assert len(result.errors) == 0
+		assert not result.is_valid
+		assert any("unreadable image" in error for error in result.errors)
 	
 	def test_validate_zip_empty(self, tmp_path):
 		from deadtrees_upload.validate_zip import validate_zip

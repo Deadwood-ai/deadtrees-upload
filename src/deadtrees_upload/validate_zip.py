@@ -9,7 +9,7 @@ from .models import ValidationResult
 
 
 # Supported image extensions in ZIP files
-IMAGE_EXTENSIONS: Set[str] = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".dng", ".raw", ".cr2", ".nef", ".arw"}
+IMAGE_EXTENSIONS: Set[str] = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".dng", ".raw", ".bmp", ".webp"}
 JPEG_EXTENSIONS: Set[str] = {".jpg", ".jpeg"}
 
 
@@ -141,6 +141,16 @@ def validate_zip(file_path: Path) -> ValidationResult:
 	
 	try:
 		with zipfile.ZipFile(file_path, 'r') as zf:
+			for info in zf.infolist():
+				if info.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
+					errors.append("ZIP compression must be Store or Deflate for the platform")
+				if info.flag_bits & 1:
+					errors.append("Encrypted ZIP members are not supported")
+				parts = Path(info.filename.replace("\\", "/")).parts
+				if info.filename.startswith(("/", "\\")) or ".." in parts:
+					errors.append("Unsafe ZIP member path")
+			if errors:
+				return ValidationResult(filename=file_path.name, is_valid=False, errors=sorted(set(errors)))
 			# Check if ZIP is valid
 			bad_file = zf.testzip()
 			if bad_file:
@@ -166,17 +176,38 @@ def validate_zip(file_path: Path) -> ValidationResult:
 			image_files = []
 			for name in file_list:
 				# Skip directories and hidden files
-				if name.endswith('/') or name.startswith('__MACOSX') or name.startswith('.'):
+				if name.endswith('/') or any(p.startswith('.') or p == '__MACOSX' for p in Path(name).parts):
 					continue
 				
 				suffix = Path(name).suffix.lower()
 				if suffix in IMAGE_EXTENSIONS:
 					image_files.append(name)
 			
+			multispectral = [name for name in image_files if "_MS_" in Path(name).name.upper()]
+			if multispectral:
+				warnings.append(f"Platform excludes {len(multispectral)} *_MS_* images; only remaining RGB candidates would be processed. Confirm mixed-input intent.")
+			image_files = [name for name in image_files if name not in multispectral]
+			from PIL import Image
+			for name in image_files:
+				if Path(name).suffix.lower() in {".raw", ".dng"}:
+					warnings.append(f"{name}: raw camera format is a platform candidate; RGB decoding is unverified locally")
+					continue
+				try:
+					with zf.open(name) as member, Image.open(member) as image:
+						if image.mode not in {"RGB", "RGBA"}:
+							errors.append(f"{name}: image is not RGB/RGBA; clarify sensor data")
+						image.verify()
+				except Exception:
+					errors.append(f"{name}: unreadable image")
+			if any(zf.getinfo(name).file_size <= 100 * 1024 for name in image_files):
+				warnings.append("Some images are <=100 KiB and are excluded by the current ODM worker")
+			eligible_count = sum(zf.getinfo(name).file_size > 100 * 1024 for name in image_files)
+			if image_files and eligible_count < 3:
+				errors.append(f"Only {eligible_count} RGB candidates survive the worker's 100 KiB size filter; at least 3 are required")
 			if len(image_files) == 0:
 				errors.append("No image files found in ZIP")
 			elif len(image_files) < 3:
-				warnings.append(f"Only {len(image_files)} images found - ODM typically needs at least 3 for reconstruction")
+				errors.append(f"Only {len(image_files)} RGB candidate images found; at least 3 are required")
 			else:
 				# Check GPS coordinates in a sample of JPEG images
 				# GPS is critical for ODM to work efficiently

@@ -10,23 +10,10 @@ from .auth import AuthSession
 
 # Processing task types for each upload type
 GEOTIFF_PROCESSING_TASKS: List[str] = [
-	"cog",
-	"thumbnail",
-	"metadata",
-	"geotiff",
-	"deadwood",
-	"treecover",
+    "geotiff", "cog", "thumbnail", "metadata", "aoi_v1",
+    "deadwood_v1", "treecover_v1", "deadwood_treecover_combined_v2", "embeddings_v1",
 ]
-
-RAW_IMAGES_PROCESSING_TASKS: List[str] = [
-	"odm_processing",
-	"cog",
-	"thumbnail",
-	"metadata",
-	"geotiff",
-	"deadwood",
-	"treecover",
-]
+RAW_IMAGES_PROCESSING_TASKS: List[str] = ["odm_processing", *GEOTIFF_PROCESSING_TASKS]
 
 
 def get_processing_tasks(upload_type: UploadType) -> List[str]:
