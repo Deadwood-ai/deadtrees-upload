@@ -1,395 +1,241 @@
 # DeadTrees Upload CLI
 
-Batch upload datasets to [deadtrees.earth](https://deadtrees.earth).
+Contribute aerial forest imagery to [deadtrees.earth](https://deadtrees.earth),
+which builds orthomosaics, map products and deadwood/tree-cover predictions.
+Upload existing RGB GeoTIFFs or ZIPs of raw RGB drone photos. Raw photos do **not**
+need to be processed first: the platform can run OpenDroneMap (ODM).
 
-## Features
+## Start from the repository URL
 
-- **Interactive CLI** - Step-by-step guided upload process with retry on errors
-- **Batch uploads** - Upload multiple GeoTIFFs or raw image ZIPs at once
-- **Single file support** - Upload individual files directly (not just directories)
-- **Template wizard** - Auto-create metadata files with date detection from files
-- **Auto token refresh** - Handles long-running uploads without re-authentication
-- **Credential persistence** - Reuses cached sessions between runs
-- **Resume support** - Automatically resume interrupted uploads
-- **Duplicate detection** - Prevents uploading the same file twice
-- **File validation** - Validates GeoTIFFs (CRS, bands) and ZIPs (GPS data) before upload
-- **Automatic date extraction** - Detects acquisition dates from GeoTIFF metadata and EXIF
-- **Automatic processing** - Triggers the processing pipeline after upload
+Point an agent to [Deadwood-ai/deadtrees-upload](https://github.com/Deadwood-ai/deadtrees-upload)
+and ask it to follow `.agents/skills/deadtrees-upload/SKILL.md` for your contributor
+folder. Keep the checkout: it contains the CLI, skill, draft helper and this
+metadata/API reference together. No separate skill install, package index or
+release download is needed.
 
-## How It Works
+Use Python 3.10+ and Git. For example, in a chosen working directory:
 
-The CLI guides you through a 6-step process:
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    DeadTrees Upload Workflow                     │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Step 1: Authentication                                          │
-│  └─> Uses cached session or prompts for login                    │
-│                                                                  │
-│  Step 2: Data Directory                                          │
-│  └─> Point to a folder with .tif/.zip files (or a single file)   │
-│                                                                  │
-│  Step 3: Metadata File                                           │
-│  └─> Provide a CSV/Excel with file info, or use Template Wizard  │
-│                                                                  │
-│  Step 4: Column Mapping                                          │
-│  └─> Map your CSV columns to required fields (auto-detected)     │
-│                                                                  │
-│  Step 5: Validation                                              │
-│  └─> Validates files + metadata before upload                    │
-│                                                                  │
-│  Step 6: Upload & Process                                        │
-│  └─> Chunked upload with progress bar, then triggers processing  │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### What Happens After Upload?
-
-Once files are uploaded, the CLI automatically triggers the appropriate processing pipeline:
-
-| File Type | Processing Pipeline |
-|-----------|---------------------|
-| **GeoTIFF** (`.tif`) | `geotiff` → `cog` → `thumbnail` → `metadata` → `deadwood` → `treecover` |
-| **Raw Images** (`.zip`) | `odm_processing` → (same as GeoTIFF after ortho generation) |
-
-- **GeoTIFFs** are converted to Cloud-Optimized GeoTIFFs (COGs), thumbnails are generated, and AI segmentation runs
-- **ZIP files** containing raw drone images are processed through OpenDroneMap (ODM) to generate orthomosaics first
-
-## Installation
-
-**Recommended: Use a fresh virtual environment** to avoid dependency conflicts.
-
-```bash
-# Create and activate a virtual environment
-python -m venv deadtrees-env
-source deadtrees-env/bin/activate  # Linux/Mac
-# or: deadtrees-env\Scripts\activate  # Windows
-
-# Install the package
-pip install git+https://github.com/Deadwood-ai/deadtrees-upload.git
-```
-
-Or install from source:
-
-```bash
+```sh
 git clone https://github.com/Deadwood-ai/deadtrees-upload.git
 cd deadtrees-upload
-pip install -e .
+# If a particular revision was agreed, check it out before installation.
+git rev-parse HEAD
+DT_UPLOAD_REPO="$PWD"
+python3 -m venv "$DT_UPLOAD_REPO/.venv"
+"$DT_UPLOAD_REPO/.venv/bin/python" -m pip install "$DT_UPLOAD_REPO"
+"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" --help
 ```
 
-### Troubleshooting: NumPy Version Conflict
+Use that checkout's skill and documentation with that installed CLI. Reinstall
+from the checkout after changing revisions. Record `git rev-parse HEAD`; the
+package version alone does not identify the source revision. Paths in the skill
+are relative to the skill file, **not** the shell's working directory. When using
+another agent outside the checkout, provide the absolute skill path explicitly.
+The commands below work from any directory when `DT_UPLOAD_REPO` is the absolute
+checkout path; it is a shell variable, not machine-specific agent configuration.
+On Windows, use the corresponding `.venv\Scripts\python.exe` and
+`.venv\Scripts\deadtrees-upload.exe` paths.
 
-If you see an error like `A module compiled using NumPy 1.x cannot be run in NumPy 2.x`, this means your environment has conflicting package versions.
+### Start with a contributor folder
 
-**Solution:** Use a fresh virtual environment (see above) or:
-
-```bash
-# Option 1: Upgrade all packages
-pip install --upgrade pandas pyarrow numpy
-
-# Option 2: Downgrade numpy
-pip install "numpy<2"
+```sh
+"$DT_UPLOAD_REPO/.venv/bin/python" \
+  "$DT_UPLOAD_REPO/.agents/skills/deadtrees-upload/scripts/prepare_metadata.py" \
+  --data-dir /path/to/contribution --output /path/to/metadata-draft.csv
 ```
 
-This commonly happens with Anaconda environments where packages get out of sync.
+The helper inventories top-level GeoTIFF/ZIP candidates using the CLI's existing
+validation and date extraction, lists unselected entries, and creates a new CSV
+(or `.xlsx`) draft. It refuses to overwrite a file. Dates appear only as embedded
+candidates in its JSON output: confirm their meaning before copying them into the
+draft. Authorship, license, capture platform, date and visibility stay blank until
+known. Filenames, timestamps and band counts alone do not establish those facts.
+Invalid candidates remain visible for review; draft creation is not validation
+success. For loose drone photos or subfolders, first agree which flight/area
+belongs together. ZIP selected originals only with authorization, preserve their
+EXIF, and do not mix unrelated flights or automatically convert imagery.
 
-## Quick Start
+Complete the draft with the contributor's decisions, then run offline validation.
+Missing/blank visibility fails unattended validation; explicitly choose `public`,
+`private` or `viewonly`. Do not fill other unknowns merely to make validation pass.
 
-### Interactive Mode
+## Automation
 
-Simply run the CLI and follow the prompts:
+```sh
+# Offline: no authentication, network, cache writes or receipt changes.
+"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" --data-dir ./data --metadata metadata.csv --dry-run --json
 
-```bash
-deadtrees-upload
+# After authorization for these files, metadata and target:
+"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" --data-dir ./data --metadata metadata.csv --non-interactive --yes --json
+
+# Add --process if platform processing is also authorized.
+"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" --data-dir ./data --metadata metadata.csv --non-interactive --yes --process --json
+
+# Inspect processing flags without submitting anything.
+"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" status 123 --json
 ```
 
-The CLI will guide you through:
-1. Authentication (email/password)
-2. Selecting your data directory
-3. Providing a metadata file
-4. Validating files and metadata
-5. Uploading and triggering processing
+`--data-dir` accepts one file or a directory of top-level `.tif`, `.tiff`,
+`.geotiff` and `.zip` files. It does not recurse. `--dry-run`, `--json`, automation
+flags and closed stdin select unattended behavior. Missing information fails
+immediately; it never falls back to a password or metadata prompt. `--json`
+emits one JSON object on stdout. CLI syntax errors use stderr. Without arguments
+in a terminal, the original human wizard remains available, including template
+creation, column mapping, stored login and automatic processing.
 
-### Single File Upload
+Automated batches validate **all** selected inputs before any network request.
+A single-file selection needs metadata for only that selected file.
+They reject malformed rows, ambiguous columns, duplicate filenames and unmatched
+files. File warnings remain visible; assess them before submitting. Local
+validation is not a guarantee that reconstruction or models will succeed.
 
-You can upload a single file directly:
+### Metadata
 
-```bash
-deadtrees-upload --data-dir /path/to/ortho.tif --metadata metadata.csv
-```
-
-### Template Wizard
-
-If you don't have a metadata file, the CLI will offer to create one automatically:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   Template Creation Wizard                      │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  1. File Scanning                                               │
-│     └─> Finds all .tif and .zip files in your directory         │
-│                                                                 │
-│  2. Date Detection                                              │
-│     └─> Extracts dates from:                                    │
-│         • GeoTIFF metadata (TIFFTAG_DATETIME)                   │
-│         • JPEG EXIF in ZIPs (DateTimeOriginal)                  │
-│                                                                 │
-│  3. Date Review Table                                           │
-│     ┌──────────────────────┬──────┬───────────────┬──────────┐  │
-│     │ File                 │ Type │ Detected Date │ Status   │  │
-│     ├──────────────────────┼──────┼───────────────┼──────────┤  │
-│     │ ortho_2024.tif       │ TIF  │ 2024-06-15    │ ✓ Found  │  │
-│     │ raw_images.zip       │ ZIP  │ 2024-07-20    │ ✓ Found  │  │
-│     │ old_survey.tif       │ TIF  │ -             │ ⚠ None   │  │
-│     └──────────────────────┴──────┴───────────────┴──────────┘  │
-│                                                                 │
-│  4. Global Values (applied to all files)                        │
-│     └─> License, Platform, Authors, Data Access                 │
-│                                                                 │
-│  5. Date Confirmation                                           │
-│     └─> Confirm or edit each file's date (year is required)     │
-│                                                                 │
-│  6. Save Template                                               │
-│     └─> Saves metadata.csv ready for upload                     │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Example session:**
-
-```
-Found 6 files
-
-              Detected Acquisition Dates
-┌────────────────────────────────┬──────┬───────────────┬──────────┐
-│ File                           │ Type │ Detected Date │ Status   │
-├────────────────────────────────┼──────┼───────────────┼──────────┤
-│ 20160215_CA_Marin_Hill_88.zip  │ ZIP  │ 2016-02-15    │ ✓ Found  │
-│ 20160213_CA_Marin_Brickyard.zip│ ZIP  │ 2016-02-13    │ ✓ Found  │
-└────────────────────────────────┴──────┴───────────────┴──────────┘
-
-Enter values that apply to ALL files:
-License [CC BY]: CC BY
-Platform [drone]: drone
-Authors: Research Team
-Data access [public]: public
-
-✓ Template saved to: /path/to/data/metadata.csv
-```
-
-### Non-Interactive Mode
-
-Provide all options via command line:
-
-```bash
-deadtrees-upload \
-  --data-dir /path/to/files \
-  --metadata /path/to/metadata.csv \
-  --email user@example.com
-```
-
-### Dry Run
-
-Validate without uploading:
-
-```bash
-deadtrees-upload --dry-run
-```
-
-### Custom API URL (Development)
-
-For testing against a local or staging environment:
-
-```bash
-deadtrees-upload --api-url http://localhost:8080/api/v1/
-```
-
-## Credential Cache
-
-The CLI stores a cached auth session to skip repeated logins:
-
-- Default path: `~/.cache/deadtrees_upload/auth_session_<api>.json`
-- Override location with `DEADTREES_UPLOAD_CACHE_DIR`
-- Delete the file to force re-login
-
-## Metadata File Format
-
-Create a CSV or Excel file with the following columns:
-
-### Required Columns
-
-| Column | Description | Valid Values |
-|--------|-------------|--------------|
-| `filename` | Name of the file (must match actual file) | Any string |
-| `license` | Data license | `CC BY`, `CC BY-SA`, `CC BY-NC-SA`, `CC BY-NC`, `MIT` |
-| `platform` | Capture platform | `drone`, `airborne` |
-| `authors` | Author names (semicolon-separated) | e.g., `John Smith; Jane Doe` |
-| `acquisition_date` OR `acquisition_year` | Date of data capture (required) | Date: `2024-06-15`, `2024-06`, `2024` / Year: `1980-2099` |
-
-### Optional Columns
-
-| Column | Description | Valid Values |
-|--------|-------------|--------------|
-| `acquisition_month` | Month of data capture | 1-12 |
-| `acquisition_day` | Day of data capture | 1-31 |
-| `data_access` | Access level | `public` (default), `private`, `viewonly` |
-| `additional_information` | Additional notes | Free text |
-| `citation_doi` | DOI if published | e.g., `10.1234/example` |
-
-### Example CSV
+CSV (UTF-8) and XLSX are supported. Use canonical columns for automation:
 
 ```csv
-filename,license,platform,authors,acquisition_date,data_access,additional_information
-ortho_001.tif,CC BY,drone,John Smith; Jane Doe,2024-06-15,public,Forest survey site A
-ortho_002.tif,CC BY,drone,John Smith,2024-06-16,public,
-raw_images.zip,CC BY-SA,drone,Research Team,2024-07,public,Raw drone images for ODM
+filename,license,platform,authors,acquisition_year,data_access
+forest.tif,CC BY,drone,Example Author;Second Author,2024,private
 ```
 
-**Note:** The `acquisition_date` column is **required**. You can provide it as:
-- Full date: `2024-06-15`
-- Year and month: `2024-06`
-- Year only: `2024`
+| Field | Contract |
+|---|---|
+| `filename` | Required unique basename matching a selected file (case-insensitive). |
+| `license` | Required: `CC BY`, `CC BY-SA`, `CC BY-NC-SA`, `CC BY-NC`, `MIT`. Established spelling aliases are accepted. |
+| `platform` | Required: `drone` or `airborne`; UAV/aircraft aliases are accepted. |
+| `authors` | Required, nonempty; separate names with semicolons. |
+| `acquisition_year` | Required, 1980–2099. Optional `acquisition_month` and `acquisition_day` must form a valid date. |
+| `acquisition_date` | Alternative to separate date columns. Prefer `YYYY`, `YYYY-MM`, `YYYY-MM-DD`; do not mix both representations. |
+| `data_access` | **Required for unattended validation/upload:** `public`, `private`, `viewonly`. Missing/blank values fail. The human wizard retains its public default. |
+| `additional_information`, `citation_doi` | Optional text. |
 
-Alternatively, you can use separate `acquisition_year`, `acquisition_month`, `acquisition_day` columns.
+Automation does not infer missing month/day from embedded timestamps. It never
+chooses authorship, licensing or access permission for the contributor.
 
-Aliases are accepted for common variations:
-- Platform: `UAV`, `aircraft`, `airplane`, `airbone`, `aerial`
-- License: `CC BY 4.0`, `CC-BY`, `CC BY-SA 4.0`, `CC BY-NC-SA 4.0`, `CC BY-NC 4.0`, `MIT License`
+### Input boundaries
 
-A template is included in `templates/metadata_template.csv`.
+- **GeoTIFF:** embedded geographic/projected CRS and transform, RGB bands in
+  positions 1–3, optionally alpha in position 4. Sidecars are not uploaded.
+  Non-RGB, more than four bands, or an unexplained fourth band fail this workflow.
+  Non-8-bit imagery with established RGB color interpretations receives a processing-compatibility warning. Header and bounded
+  pixel checks cannot establish every pixel's integrity or true sensor semantics.
+- **Raw-drone ZIP:** Store or Deflate compression; unencrypted members; at least
+  three image candidates surviving the worker size/name filters. JPEG, PNG, TIFF, BMP and WebP are checked with Pillow;
+  RAW/DNG are accepted by the worker as candidates but decoding is unverified
+  locally. Camera-specific CR2/NEF/ARW are not worker candidates.
+- Current ODM code excludes images <=100 KiB and names containing `_MS_`.
+  Mixed archives receive warnings identifying that behavior. Multispectral-only
+  archives fail. Missing GPS, insufficient overlap or unknown sensor layouts need
+  contributor clarification. No new preprocessing or multispectral support is
+  provided by this CLI.
 
-## Supported File Types
+These checks intentionally distinguish supported RGB contributions from the
+platform's broader extension acceptance. The platform stores GeoTIFF uploads
+before technical processing; an upload response does not validate imagery.
 
-### GeoTIFF Files (Orthomosaics)
-- Extensions: `.tif`, `.tiff`, `.geotiff`
-- **Requirements:**
-  - Valid Coordinate Reference System (CRS) - `LOCAL_CS` and engineering CRS are rejected
-  - At least 3 bands (RGB)
-  - Proper georeferencing (transform must not be identity)
+### Authentication and endpoints
 
-### ZIP Files (Raw Drone Images)
-- Extension: `.zip`
-- Should contain raw drone images for ODM processing
-- Supported image formats: JPEG, PNG, TIFF, DNG, RAW, CR2, NEF, ARW
-- **Recommendation:** Images should have GPS coordinates in EXIF for best ODM results
+For a first-time human login, give the user this command to run in **their own
+terminal on the same machine/OS account** as the agent:
 
-## Validation Details
-
-Before upload, the CLI validates each file:
-
-### GeoTIFF Validation
-
-| Check | Description | Error If Failed |
-|-------|-------------|-----------------|
-| CRS | Must have a valid coordinate reference system | `Invalid CRS: LOCAL_CS not supported` |
-| Bands | Must have at least 3 bands (RGB) | `Insufficient bands: found 1, need 3+` |
-| Georeferencing | Must have proper transform (not identity) | `Missing georeferencing` |
-
-### ZIP Validation
-
-| Check | Description | Warning If Failed |
-|-------|-------------|-------------------|
-| Image count | Must contain image files | `No images found in ZIP` |
-| GPS data | Sample images checked for GPS EXIF | `⚠ No GPS data - ODM may fail` |
-
-**Note:** ZIP validation issues are warnings, not errors. You can still upload, but ODM processing may fail without GPS data.
-
-## Error Handling & Retry
-
-The CLI is designed to be fault-tolerant:
-
-### Metadata Errors
-
-If there's an error in your metadata file (missing required fields, invalid values), the CLI will:
-1. Show you exactly what's wrong
-2. Ask if you want to fix the file and retry
-3. Let you edit the file externally (in any editor)
-4. Press Enter to re-read the file without restarting the CLI
-
-```
-✗ Validation error: Missing required field 'acquisition_year' for file ortho.tif
-
-Would you like to fix the metadata and retry? [y/n]: y
-
-Fix the metadata file and press Enter when ready...
+```sh
+"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" login
 ```
 
-### Resume Interrupted Uploads
+The human enters email and a masked password locally. Do not ask for the password
+in chat or run the interactive handoff through an agent transcript. `login` uses
+the existing Supabase password/session route, saves a refreshable session with
+private file permissions, and exits without upload or processing. It refuses
+closed stdin. A save failure is an error; a successful login does not authorize
+an upload. Subsequent agent commands reuse that cache for the same API target
+without needing the password. Run `login` again to replace a stale session or
+change account; existing upload receipts remain bound to their original account.
 
-If an upload is interrupted (network failure, crash, etc.), the CLI automatically saves progress to `.deadtrees-upload-session.json` in your data directory. 
+The cache follows `XDG_CACHE_HOME/deadtrees_upload` or
+`~/.cache/deadtrees_upload`; `DEADTREES_UPLOAD_CACHE_DIR` can select another local
+location. Keep the default for simple same-user onboarding. A different OS user,
+remote host or container will not automatically share that session: log in in the
+intended environment or use an already-authorized credential provider. Do not copy
+session contents into chat. The cache is a private local file, not an OS keychain.
 
-On the next run, you'll be prompted to resume:
+If an authorized credential provider is already available, unattended commands can
+instead use `DEADTREES_ACCESS_TOKEN` (no automatic refresh), or `DEADTREES_EMAIL`
+and `DEADTREES_PASSWORD` (refreshable in memory; new credentials are not saved).
+These environment variables take precedence over the cache, so remove stale
+provider overrides when intending to use the human's new login.
 
+Onboarding limitation: `login` requires an existing account able to authenticate
+with email/password. It does not implement sign-up, OAuth/device login, password
+reset or MFA challenge handling. If that route is unavailable, the human must
+resolve account access through the platform's normal account flow; the agent must
+not ask them to paste secrets as a workaround.
+
+Never pass passwords/tokens in command arguments, repository files or logs.
+The built-in production target is `https://data2.deadtrees.earth/api/v1/` with
+`https://supabase.deadtrees.earth`. Any `--api-url` override requires explicit
+`DEADTREES_SUPABASE_URL` and `DEADTREES_SUPABASE_KEY`. Verify they belong together.
+Only loopback endpoints may use HTTP. No shared localhost service is selected
+implicitly. Using a local URL does not prove service isolation.
+
+### Receipts, resume and failures
+
+Automation writes `.deadtrees-upload-agent.json` beside the data **before** upload
+and keeps it after success. It binds the account, target, full SHA-256 file content
+and resolved metadata. `--resume` skips confirmed uploads; changed inputs or
+account require reconciliation. Exact content duplicates with identical metadata
+apart from filename are skipped. Conflicting duplicate metadata requires a decision.
+The receipt includes upload IDs, dataset IDs and processing-request state, never
+credentials. Preserve it. Each directory represents one fixed batch: put later
+contributions in a new directory with their own metadata and receipt. Do not add
+new files to a completed batch or mix agent and wizard uploads in that directory.
+There is no cross-directory or server-wide duplicate detection, so include only
+new contributions in the new directory. Byte-offset resume is unavailable.
+
+The current chunk endpoint appends later chunks and is **not idempotent**. Only
+an explicit authentication rejection is retried after refreshing credentials.
+Lost/invalid final responses, transport errors and uncertain server errors stop
+without replay. A `not_uploaded` receipt means no chunk was accepted; after fixing
+the cause, explicit `--resume` may retry it. Authentication rejection after an
+earlier accepted chunk is unresolved and cannot be retried this way.
+Interrupted/in-flight uploads or processing requests remain
+unresolved until inspected. Do not delete the receipt and start again to bypass
+this boundary. A crash may leave a lock: confirm the owner stopped before removing
+that lock, then use `--resume` to inspect the receipt.
+
+`--process` requests geotiff, COG, thumbnail, metadata, AOI, deadwood/treecover
+models and embeddings; raw photos also request ODM. A processing request failure
+preserves the uploaded dataset ID and does not automatically requeue.
+`status` reads the authenticated account's `v2_statuses` row. An inaccessible row
+is unknown; upload done and processing requested are not terminal completion.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Requested operation succeeded (inspect operation and processing state). |
+| 2 | Invalid/missing options, metadata or files. |
+| 3 | Authentication unavailable or rejected before submission. |
+| 4 | Request failed. |
+| 5 | Existing/uncertain state requires reconciliation. |
+
+The interactive wizard retains its legacy filename-based session behavior. For
+repeatable automation use the explicit unattended workflow and retained receipt.
+
+## Development and contract evidence
+
+```sh
+python -m pip install -e '.[dev]'
+python -m pytest -q
+python -m pip install build
+python -m build
 ```
-┌─ Previous Session ─────────────────────┐
-│ Found incomplete upload session        │
-│ Started: 2024-06-15T10:30:00           │
-│ Completed: 5/20                        │
-│ Failed: 1                              │
-└────────────────────────────────────────┘
-Resume previous session? [y/n]:
-```
 
-### Duplicate Detection
+Tests use synthetic imagery and mocked HTTP; no production writes are needed.
+Source and distribution exercises should run in fresh environments. Tests cover
+closed stdin, offline validation, metadata failures, authentication, chunk payloads,
+uncertain finalization, receipt resume and processing/status distinctions.
 
-The CLI tracks uploaded files by computing a hash of each file. If you try to upload the same file again:
-- Within the same session: Automatically skipped
-- Across sessions: Warned and prompted to skip or re-upload
-
-## CLI Reference
-
-```
-Usage: deadtrees-upload [OPTIONS] COMMAND [ARGS]...
-
-Options:
-  -d, --data-dir PATH   Path to directory containing files to upload
-  -m, --metadata PATH   Path to metadata CSV/Excel file
-  -e, --email TEXT      Email for authentication
-  --api-url TEXT        API URL (for development/testing)
-  --dry-run             Validate without uploading
-  --help                Show this message and exit
-
-Commands:
-  version  Show version information
-```
-
-## Development
-
-### Setup
-
-```bash
-git clone https://github.com/Deadwood-ai/deadtrees-upload.git
-cd deadtrees-upload
-pip install -e ".[dev]"
-```
-
-### Running Tests
-
-```bash
-pytest
-```
-
-### Testing Against Local Environment
-
-```bash
-# Start the deadtrees test stack
-cd ../deadtrees
-deadtrees dev start
-
-# Run the CLI against local API
-deadtrees-upload --api-url http://localhost:8080/api/v1/
-```
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Links
-
-- **Website**: [deadtrees.earth](https://deadtrees.earth)
-- **Documentation**: [docs.deadtrees.earth](https://docs.deadtrees.earth)
-- **Issues**: [GitHub Issues](https://github.com/Deadwood-ai/deadtrees-upload/issues)
+Platform contract checked against
+[DeadTrees source at 4751ac9](https://github.com/Deadwood-ai/deadtrees/tree/4751ac973853e64cb032047cd6dba9fed7763043):
+`api/src/routers/upload.py`, `shared/models.py`, `shared/zip_utils.py`,
+`processor/src/process_odm.py` and `frontend/src/components/Upload/UploadModal.tsx`.
+This is source compatibility evidence; deployment and real contributor processing
+remain separate acceptance checks. No release is implied by local validation.

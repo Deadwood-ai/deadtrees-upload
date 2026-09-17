@@ -70,7 +70,7 @@ def find_uploadable_files(path: Path) -> Tuple[List[Path], Dict[str, str]]:
 	if not path.is_dir():
 		raise ValidationError(f"Path is not a file or directory: {path}")
 	
-	for file_path in path.iterdir():
+	for file_path in sorted(path.iterdir()):
 		if not file_path.is_file():
 			continue
 		
@@ -168,6 +168,7 @@ def match_files_to_metadata(
 
 def validate_all(
 	matched_metadata: List[FileMetadata],
+	extract_dates: bool = True,
 ) -> List[ValidationResult]:
 	"""
 	Validate all matched files and apply extracted dates to metadata.
@@ -193,11 +194,11 @@ def validate_all(
 		
 		# Apply extracted date to metadata if not already set
 		year, month, day = extracted_date
-		if year and metadata.acquisition_year is None:
+		if extract_dates and year and metadata.acquisition_year is None:
 			metadata.acquisition_year = year
-		if month and metadata.acquisition_month is None:
+		if extract_dates and month and metadata.acquisition_month is None:
 			metadata.acquisition_month = month
-		if day and metadata.acquisition_day is None:
+		if extract_dates and day and metadata.acquisition_day is None:
 			metadata.acquisition_day = day
 		
 		result.metadata = metadata

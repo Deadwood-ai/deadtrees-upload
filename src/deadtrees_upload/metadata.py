@@ -107,12 +107,18 @@ def read_metadata_file(file_path: Path) -> pd.DataFrame:
 	
 	try:
 		if suffix == ".csv":
+			header = pd.read_csv(file_path, header=None, nrows=1, dtype=str).iloc[0].tolist()
 			df = pd.read_csv(file_path, dtype=str)
 		elif suffix in [".xlsx", ".xls"]:
+			header = pd.read_excel(file_path, header=None, nrows=1, dtype=str).iloc[0].tolist()
 			df = pd.read_excel(file_path, dtype=str)
 		else:
 			raise MetadataError(f"Unsupported file format: {suffix}. Use .csv or .xlsx")
 		
+		normalized_header = [str(value).strip().lower() for value in header if pd.notna(value) and str(value).strip()]
+		if len(set(normalized_header)) != len(normalized_header):
+			raise MetadataError("Duplicate column names; use one column per metadata field")
+
 		# Clean column names
 		df.columns = [str(col).strip().lower() for col in df.columns]
 		
@@ -197,6 +203,8 @@ def suggest_column_matches(df: pd.DataFrame, target_column: str) -> List[str]:
 def parse_metadata(
 	df: pd.DataFrame,
 	column_mapping: Dict[str, str],
+	*,
+	require_data_access: bool = False,
 ) -> Tuple[List[FileMetadata], List[Tuple[int, str]]]:
 	"""
 	Parse DataFrame rows into FileMetadata objects.
@@ -219,12 +227,14 @@ def parse_metadata(
 			data = {}
 			for standard_name, actual_col in column_mapping.items():
 				value = row.get(actual_col)
-				if value is not None and str(value).strip():
+				if value is not None and pd.notna(value) and str(value).strip():
 					data[standard_name] = value
 			
 			# Handle date column - parse into year/month/day if present
 			if "acquisition_date" in data and data["acquisition_date"]:
 				year, month, day = parse_date_string(str(data["acquisition_date"]))
+				if year is None:
+					raise ValueError("Invalid acquisition_date; use YYYY, YYYY-MM, or YYYY-MM-DD")
 				if year and "acquisition_year" not in data:
 					data["acquisition_year"] = year
 				if month and "acquisition_month" not in data:
@@ -234,6 +244,10 @@ def parse_metadata(
 				# Remove the date field as it's not in the model
 				del data["acquisition_date"]
 			
+			# Unattended callers must never infer permission to publish.
+			if require_data_access and "data_access" not in data:
+				raise ValueError("Explicit data_access is required for unattended uploads: public, private, or viewonly")
+
 			# Validate required fields are present
 			for required in REQUIRED_COLUMNS:
 				if required not in data or not data[required]:

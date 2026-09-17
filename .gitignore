@@ -81,3 +81,6 @@ Thumbs.db
 
 # Upload session state (local tracking for resume)
 .deadtrees-upload-session.json
+
+.deadtrees-upload-agent.json
+.deadtrees-upload-agent.lock
