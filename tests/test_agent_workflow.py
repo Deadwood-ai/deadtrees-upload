@@ -206,6 +206,7 @@ def test_processing_failure_keeps_dataset_and_prevents_requeue(inputs, monkeypat
         if request.method == "PUT":
             tasks = json.loads(request.content)["task_types"]
             assert "deadwood_v1" in tasks and "deadwood" not in tasks
+            assert tasks[-1] == "doy_estimation_v1"
             return httpx.Response(503)
         return httpx.Response(200, json={"id": 123})
     http_mock(monkeypatch, handle)

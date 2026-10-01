@@ -203,8 +203,9 @@ this boundary. A crash may leave a lock: confirm the owner stopped before removi
 that lock, then use `--resume` to inspect the receipt.
 
 `--process` requests geotiff, COG, thumbnail, metadata, AOI, deadwood/treecover
-models and embeddings; raw photos also request ODM. A processing request failure
-preserves the uploaded dataset ID and does not automatically requeue.
+models, embeddings and the acquisition-date estimate; raw photos also request
+ODM. A processing request failure preserves the uploaded dataset ID and does not
+automatically requeue.
 `status` reads the authenticated account's `v2_statuses` row. An inaccessible row
 is unknown; upload done and processing requested are not terminal completion.
 
