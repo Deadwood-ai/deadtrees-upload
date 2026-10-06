@@ -14,6 +14,7 @@ from .state import atomic_json
 from .metadata import COLUMN_ALIASES, find_column_mapping, parse_metadata, read_metadata_file
 from .validation import find_uploadable_files, match_files_to_metadata, validate_all
 from .upload import upload_file
+from .dedup import find_remote_duplicate, get_file_identifier
 from .process import trigger_processing, get_processing_tasks
 
 
@@ -115,7 +116,7 @@ def authenticated_user(api_url, token):
     return user_id
 
 
-def submit(report, data_path, metadata_path, api_url, token, resume=False, process=False):
+def submit(report, data_path, metadata_path, api_url, token, resume=False, process=False, allow_duplicates=False):
     """Persist intent before mutation. Unknown outcomes require reconciliation."""
     from .models import FileMetadata, UploadType
     directory = data_path if data_path.is_dir() else data_path.parent
@@ -155,7 +156,7 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
             journal = {"schema_version": 1, "api_url": target, "inputs": fingerprints, "user_id": user_id, "results": {}}
         for name, previous in journal["results"].items():
             if (name not in fingerprints or not isinstance(previous, dict)
-                    or previous.get("state") not in {"in_flight", "unknown", "failed", "not_uploaded", "uploaded", "duplicate"}):
+                    or previous.get("state") not in {"in_flight", "unknown", "failed", "not_uploaded", "uploaded", "duplicate", "already_on_platform"}):
                 raise BatchError("Invalid upload receipt state; preserve it for reconciliation", 5)
             if previous["state"] in {"uploaded", "duplicate"} and (type(previous.get("dataset_id")) is not int or previous["dataset_id"] <= 0):
                 raise BatchError("Receipt lacks a confirmed dataset ID; reconcile before continuing", 5)
@@ -164,13 +165,24 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
             if previous.get("processing") in {"in_flight", "unknown"}:
                 raise BatchError(f"Dataset {previous.get('dataset_id')}: processing request unresolved; use status, do not requeue automatically", 5)
         atomic_json(journal_path, journal)
+        # Flag every file the platform already holds before sending any bytes,
+        # unless the user explicitly asked to upload them as new datasets.
+        if not allow_duplicates:
+            for item in entries:
+                name = item["metadata"]["filename"]
+                if journal["results"].get(name, {}).get("state") not in {None, "not_uploaded"}:
+                    continue
+                existing = find_remote_duplicate(get_file_identifier(Path(item["path"])), target, token)
+                if existing:
+                    journal["results"][name] = already_on_platform(existing.dataset_id, existing.describe())
+        atomic_json(journal_path, journal)
         for item in entries:
             name = item["metadata"]["filename"]
             previous = journal["results"].get(name, {})
             if file_digest(item["path"]) != fingerprints[name]["sha256"]:
                 raise BatchError(f"{name}: file changed after validation; no further uploads attempted", 2)
-            if previous.get("state") == "not_uploaded":
-                previous = {}  # Explicit --resume may retry a known pre-write failure.
+            if previous.get("state") == "not_uploaded" or (allow_duplicates and previous.get("state") == "already_on_platform"):
+                previous = {}  # Explicit --resume may retry a known pre-write failure or a skipped duplicate.
             metadata = FileMetadata(**item["metadata"], file_path=Path(item["path"]), upload_type=UploadType(item["upload_type"]))
             if not previous:
                 # Full content identity catches duplicates even when filenames differ.
@@ -189,7 +201,12 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
                 previous = {"state": "in_flight", "upload_id": upload_id}
                 journal["results"][name] = previous
                 atomic_json(journal_path, journal)
-                result = upload_file(metadata, token, target, upload_id=upload_id, expected_sha256=fingerprints[name]["sha256"])
+                result = upload_file(metadata, token, target, upload_id=upload_id, expected_sha256=fingerprints[name]["sha256"],
+                                     allow_duplicate=allow_duplicates)
+                if result.already_on_platform:
+                    previous.update(already_on_platform(result.dataset_id, result.error))
+                    atomic_json(journal_path, journal)
+                    continue
                 previous.update(state="uploaded" if result.success else "unknown" if result.outcome_unknown else "not_uploaded",
                                 dataset_id=result.dataset_id, error=result.error)
                 atomic_json(journal_path, journal)
@@ -210,6 +227,14 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
                 "receipt": str(journal_path), "results": journal["results"], "exit_code": 0}
     finally:
         lock_path.unlink(missing_ok=True)
+
+
+def already_on_platform(dataset_id, message) -> dict:
+    """Receipt entry for a file the platform already holds; it is skipped, not failed.
+
+    dataset_id is None when the caller may not see the existing dataset.
+    """
+    return {"state": "already_on_platform", "dataset_id": dataset_id, "message": message}
 
 
 def status(dataset_id, api_url, email=None):

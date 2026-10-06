@@ -8,6 +8,7 @@ from rich.progress import Progress, TaskID
 
 from .models import FileMetadata, UploadResult
 from .auth import AuthSession
+from .dedup import RemoteDuplicate
 
 
 class UploadError(Exception):
@@ -15,6 +16,23 @@ class UploadError(Exception):
 
 
 DEFAULT_CHUNK_SIZE = 100 * 1024 * 1024
+DUPLICATE_UPLOAD_CODE = "DUPLICATE_UPLOAD"
+
+
+def rejected_as_duplicate(response: httpx.Response) -> Optional[RemoteDuplicate]:
+    """The API's HTTP 409 for a file already on the platform; no dataset was created."""
+    if response.status_code != 409:
+        return None
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        return None
+    if not isinstance(detail, dict) or detail.get("code") != DUPLICATE_UPLOAD_CODE:
+        return None
+    dataset_id = detail.get("existing_dataset_id")
+    message = detail.get("message")
+    return RemoteDuplicate(dataset_id=dataset_id if type(dataset_id) is int else None,
+                           message=message if isinstance(message, str) else "")
 
 
 def format_size(size_bytes: int) -> str:
@@ -27,7 +45,8 @@ def format_size(size_bytes: int) -> str:
 def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url: str,
                 chunk_size: int = DEFAULT_CHUNK_SIZE, progress: Optional[Progress] = None,
                 task_id: Optional[TaskID] = None, max_retries: int = 3,
-                upload_id: Optional[str] = None, expected_sha256: Optional[str] = None) -> UploadResult:
+                upload_id: Optional[str] = None, expected_sha256: Optional[str] = None,
+                allow_duplicate: bool = False) -> UploadResult:
     """Retry only 401 responses known to occur before the server writes a chunk.
 
     Transport errors and other responses may occur after append or dataset creation.
@@ -57,6 +76,9 @@ def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url:
             form[target] = str(value)
     if metadata.upload_type:
         form["upload_type"] = metadata.upload_type.value
+    if allow_duplicate:
+        # Explicit override: the platform accepts a file it already holds as a new dataset.
+        form["allow_duplicate"] = "true"
     attempted = False
     transmitted_hash = hashlib.sha256()
     try:
@@ -82,6 +104,10 @@ def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url:
                             continue
                         return failed("Authentication rejected; earlier chunks may remain on the server" if index else "Authentication rejected before any chunk was accepted", index > 0)
                     break
+                duplicate = rejected_as_duplicate(response)
+                if duplicate:
+                    return UploadResult(filename=metadata.filename, success=False, error=duplicate.describe(),
+                                        dataset_id=duplicate.dataset_id, upload_id=upload_id, already_on_platform=True)
                 if response.status_code >= 300:
                     return failed(f"Upload stopped at chunk {index + 1}/{chunks} (HTTP {response.status_code}); reconcile before retry", True)
                 if progress and task_id is not None:

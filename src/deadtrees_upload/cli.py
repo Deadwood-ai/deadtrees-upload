@@ -68,6 +68,7 @@ def main(
     yes: bool = typer.Option(False, "--yes", help="Confirm the authorized upload without prompting"),
     resume: bool = typer.Option(False, "--resume", help="Reuse the agent receipt; never retry unresolved uploads"),
     process: bool = typer.Option(False, "--process", help="Also request platform processing after upload"),
+    allow_duplicates: bool = typer.Option(False, "--allow-duplicates", help="Upload files deadtrees.earth already holds as new datasets instead of skipping them"),
 	dry_run: bool = typer.Option(
 		False,
 		"--dry-run",
@@ -83,7 +84,7 @@ def main(
 	Features:
 	- Auto-refresh tokens for long uploads
 	- Resume interrupted uploads
-	- Local duplicate detection
+	- Duplicate detection, within the batch and against deadtrees.earth
 	- Session state saved to .deadtrees-upload-session.json
 	"""
 	# If a subcommand was invoked, skip main logic
@@ -105,7 +106,7 @@ def main(
 				validate_url(api_url)
 				token = batch.authenticate(api_url, email)
 				warnings = {item["filename"]: item["warnings"] for item in report["files"] if item["warnings"]}
-				report = batch.submit(report, data_dir, metadata, api_url, token, resume, process)
+				report = batch.submit(report, data_dir, metadata, api_url, token, resume, process, allow_duplicates)
 				report["warnings"] = warnings
 				code = report.pop("exit_code")
 		except batch.BatchError as e:
@@ -232,17 +233,19 @@ def main(
 		dry_run,
 		session=upload_session,
 		data_dir=data_dir,
+		allow_duplicates=allow_duplicates,
 	)
 	
 	# Clean up session file on successful completion
-	if upload_results and all(r.success for r in upload_results):
+	finished = upload_results and all(r.success or r.already_on_platform for r in upload_results)
+	if finished:
 		session_file = get_session_file_path(data_dir)
 		session_file.unlink(missing_ok=True)
 	
 	# Summary
 	if upload_results:
 		show_summary(upload_results, api_url)
-		if not all(r.success for r in upload_results):
+		if not finished:
 			raise typer.Exit(4)
 
 

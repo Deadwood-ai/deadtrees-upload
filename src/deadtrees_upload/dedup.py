@@ -9,6 +9,9 @@ from datetime import datetime
 
 import httpx
 
+from .auth import AuthSession
+from .config import supabase_config
+
 
 class DedupError(Exception):
 	"""Duplicate detection error."""
@@ -16,57 +19,62 @@ class DedupError(Exception):
 
 
 def get_file_identifier(file_path: Path, sample_size: int = 10 * 1024 * 1024) -> str:
-	"""
-	Generate a quick file identifier by sampling start/end of file.
-	
-	This matches the backend's hash calculation in shared/hash.py.
-	
-	Args:
-		file_path: Path to file
-		sample_size: Size of samples to read (default 10MB)
-	
-	Returns:
-		SHA256 hex digest
+	"""Upload fingerprint: SHA-256 over the decimal file size, the first and the last `sample_size` bytes.
+
+	Must stay byte-for-byte equal to shared.hash.get_file_identifier in the platform,
+	which hashes the whole file twice when it is smaller than `sample_size`.
 	"""
 	file_size = file_path.stat().st_size
 	hasher = hashlib.sha256()
-	
+
 	with open(file_path, 'rb') as f:
-		# Hash file size
 		hasher.update(str(file_size).encode())
-		
-		# Hash first 10MB
 		hasher.update(f.read(sample_size))
-		
-		# Hash last 10MB
-		if file_size > sample_size:
-			f.seek(-min(sample_size, file_size), 2)
-			hasher.update(f.read(sample_size))
-	
+		f.seek(-min(sample_size, file_size), 2)
+		hasher.update(f.read(sample_size))
+
 	return hasher.hexdigest()
 
 
-def check_hash_exists(file_hash: str, api_url: str, token: str) -> Optional[int]:
+@dataclass(frozen=True)
+class RemoteDuplicate:
+	"""A file already on deadtrees.earth; `dataset_id` is None when the caller may not see that dataset."""
+	dataset_id: Optional[int]
+	message: str = ""
+
+	def describe(self) -> str:
+		if self.message:
+			return self.message
+		if self.dataset_id is None:
+			return "This file has already been uploaded to deadtrees.earth."
+		return f"This file is already on deadtrees.earth as dataset {self.dataset_id}."
+
+
+def find_remote_duplicate(fingerprint: str, api_url: str, token) -> Optional[RemoteDuplicate]:
+	"""Ask the platform whether a non-archived dataset already holds this file, before sending any bytes.
+
+	Uses the platform's `find_duplicate_upload` database function, the same rule the API
+	enforces when an upload completes. A failed lookup returns None so the upload proceeds
+	and the API still rejects a duplicate at finalisation.
 	"""
-	Check if a file hash already exists in the database.
-	
-	Args:
-		file_hash: SHA256 hash to check
-		api_url: Base API URL
-		token: Authentication token
-	
-	Returns:
-		Dataset ID if exists, None otherwise
-	"""
-	# Query the API to check for existing hash
-	# This would require an endpoint on the backend
-	# For now, we'll implement a fallback using filename matching
-	
-	# TODO: Implement API endpoint for hash check
-	# check_url = api_url.rstrip("/") + "/datasets/check-hash"
-	# response = client.post(check_url, json={"sha256": file_hash}, headers=...)
-	
-	return None
+	url, key = supabase_config(api_url)
+	bearer = token.get_valid_token() if isinstance(token, AuthSession) else token
+	try:
+		with httpx.Client(timeout=30) as client:
+			response = client.post(
+				url.rstrip("/") + "/rest/v1/rpc/find_duplicate_upload",
+				json={"p_fingerprint": fingerprint},
+				headers={"apikey": key, "Authorization": f"Bearer {bearer}"},
+			)
+	except httpx.HTTPError:
+		return None
+	if response.status_code != 200:
+		return None
+	rows = response.json()
+	if not isinstance(rows, list) or not rows:
+		return None
+	dataset_id = rows[0].get("dataset_id") if isinstance(rows[0], dict) else None
+	return RemoteDuplicate(dataset_id=dataset_id if type(dataset_id) is int else None)
 
 
 @dataclass

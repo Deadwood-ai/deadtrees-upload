@@ -188,8 +188,16 @@ The receipt includes upload IDs, dataset IDs and processing-request state, never
 credentials. Preserve it. Each directory represents one fixed batch: put later
 contributions in a new directory with their own metadata and receipt. Do not add
 new files to a completed batch or mix agent and wizard uploads in that directory.
-There is no cross-directory or server-wide duplicate detection, so include only
-new contributions in the new directory. Byte-offset resume is unavailable.
+Before sending any bytes, the CLI asks deadtrees.earth whether it already holds
+each file, using the same upload fingerprint the platform stores (SHA-256 over the
+file size and the first and last 10 MB). Files it already holds are skipped and
+recorded as `already_on_platform`, with the existing dataset ID when your account
+may see it. The API rejects the same files when an upload completes, which the
+receipt records the same way. Either outcome is final, not a failure: if the
+existing dataset failed processing or you believe the file differs, contact
+info@deadtrees.earth instead of re-uploading. To deliberately upload such a file
+as a new dataset anyway, add `--allow-duplicates`; with `--resume` it also
+uploads files an earlier run skipped as `already_on_platform`. Byte-offset resume is unavailable.
 
 The current chunk endpoint appends later chunks and is **not idempotent**. Only
 an explicit authentication rejection is retried after refreshing credentials.

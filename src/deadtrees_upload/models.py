@@ -171,6 +171,9 @@ class UploadResult(BaseModel):
 	error: Optional[str] = None
 	upload_id: Optional[str] = None
 	outcome_unknown: bool = False
+	# The platform rejected the file because a non-archived dataset already holds it.
+	# dataset_id then names that dataset, or is None when the caller may not see it.
+	already_on_platform: bool = False
 
 
 class UploadSession(BaseModel):

@@ -12,7 +12,7 @@ from .auth import AuthSession
 from .metadata import parse_metadata
 from .validation import find_uploadable_files, match_files_to_metadata, validate_all
 from .upload import upload_file, format_size, trigger_processing
-from .dedup import UploadSessionState, get_session_file_path, get_file_identifier
+from .dedup import UploadSessionState, get_session_file_path, get_file_identifier, find_remote_duplicate
 from .display import (
 	print_step,
 	show_validation_table,
@@ -20,6 +20,7 @@ from .display import (
 	show_unmatched_files,
 	show_unmatched_metadata,
 	show_duplicates,
+	show_already_on_platform,
 )
 from .prompts import confirm_upload
 
@@ -110,6 +111,7 @@ def do_upload(
 	dry_run: bool,
 	session: Optional[UploadSessionState] = None,
 	data_dir: Optional[Path] = None,
+	allow_duplicates: bool = False,
 ) -> List[UploadResult]:
 	"""Upload all valid files with session state tracking."""
 	print_step(6, "Upload")
@@ -141,6 +143,10 @@ def do_upload(
 			console.print(f"[dim]Skipping {len(already_done)} already-uploaded files[/dim]")
 			valid_results = [r for r in valid_results if r.metadata.filename not in session.files_completed]
 		
+		# Skips are decided afresh on every run, so a resumed session neither re-uploads
+		# a file skipped earlier nor keeps skipping one that --allow-duplicates now permits.
+		session.files_skipped.clear()
+
 		# Check for local duplicates (same hash in this batch)
 		seen_hashes = {}
 		duplicates = []
@@ -155,8 +161,23 @@ def do_upload(
 					seen_hashes[file_hash] = filename
 		
 		show_duplicates(duplicates)
-		if duplicates:
-			valid_results = [r for r in valid_results if r.metadata.filename not in session.files_skipped]
+
+		# Ask the platform which files it already holds, before any bytes are sent
+		already_on_platform = []
+		if not allow_duplicates:
+			with console.status("[bold green]Checking deadtrees.earth for files already uploaded...[/bold green]"):
+				for result in valid_results:
+					filename = result.metadata.filename
+					file_hash = session.file_hashes.get(filename)
+					if not file_hash or filename in session.files_skipped:
+						continue
+					existing = find_remote_duplicate(file_hash, api_url, token)
+					if existing:
+						already_on_platform.append((filename, existing.describe()))
+						session.mark_skipped(filename, existing.describe())
+
+		show_already_on_platform(already_on_platform)
+		valid_results = [r for r in valid_results if r.metadata.filename not in session.files_skipped]
 	
 	if not valid_results:
 		console.print("[green]✓[/green] All files already uploaded or skipped")
@@ -215,6 +236,7 @@ def do_upload(
 				api_url=api_url,
 				progress=progress,
 				task_id=file_task,
+				allow_duplicate=allow_duplicates,
 			)
 			
 			upload_results.append(upload_result)
@@ -223,6 +245,8 @@ def do_upload(
 			if session:
 				if upload_result.success:
 					session.mark_completed(metadata.filename, upload_result.dataset_id)
+				elif upload_result.already_on_platform:
+					session.mark_skipped(metadata.filename, upload_result.error)
 				else:
 					session.mark_failed(metadata.filename, upload_result.error or "Unknown error")
 				
@@ -257,6 +281,10 @@ def do_upload(
 					progress.console.print(
 						f"  [yellow]⚠[/yellow] {metadata.filename} → Dataset ID: {upload_result.dataset_id} [dim](upload ok, processing failed to start)[/dim]"
 					)
+			elif upload_result.already_on_platform:
+				progress.console.print(
+					f"  [yellow]![/yellow] {metadata.filename}: {upload_result.error}"
+				)
 			else:
 				progress.console.print(
 					f"  [red]✗[/red] {metadata.filename}: {upload_result.error}"
