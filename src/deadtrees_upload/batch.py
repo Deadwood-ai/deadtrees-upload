@@ -116,7 +116,7 @@ def authenticated_user(api_url, token):
     return user_id
 
 
-def submit(report, data_path, metadata_path, api_url, token, resume=False, process=False):
+def submit(report, data_path, metadata_path, api_url, token, resume=False, process=False, allow_duplicates=False):
     """Persist intent before mutation. Unknown outcomes require reconciliation."""
     from .models import FileMetadata, UploadType
     directory = data_path if data_path.is_dir() else data_path.parent
@@ -165,22 +165,24 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
             if previous.get("processing") in {"in_flight", "unknown"}:
                 raise BatchError(f"Dataset {previous.get('dataset_id')}: processing request unresolved; use status, do not requeue automatically", 5)
         atomic_json(journal_path, journal)
-        # Flag every file the platform already holds before sending any bytes.
-        for item in entries:
-            name = item["metadata"]["filename"]
-            if journal["results"].get(name, {}).get("state") not in {None, "not_uploaded"}:
-                continue
-            existing = find_remote_duplicate(get_file_identifier(Path(item["path"])), target, token)
-            if existing:
-                journal["results"][name] = already_on_platform(existing.dataset_id, existing.describe())
+        # Flag every file the platform already holds before sending any bytes,
+        # unless the user explicitly asked to upload them as new datasets.
+        if not allow_duplicates:
+            for item in entries:
+                name = item["metadata"]["filename"]
+                if journal["results"].get(name, {}).get("state") not in {None, "not_uploaded"}:
+                    continue
+                existing = find_remote_duplicate(get_file_identifier(Path(item["path"])), target, token)
+                if existing:
+                    journal["results"][name] = already_on_platform(existing.dataset_id, existing.describe())
         atomic_json(journal_path, journal)
         for item in entries:
             name = item["metadata"]["filename"]
             previous = journal["results"].get(name, {})
             if file_digest(item["path"]) != fingerprints[name]["sha256"]:
                 raise BatchError(f"{name}: file changed after validation; no further uploads attempted", 2)
-            if previous.get("state") == "not_uploaded":
-                previous = {}  # Explicit --resume may retry a known pre-write failure.
+            if previous.get("state") == "not_uploaded" or (allow_duplicates and previous.get("state") == "already_on_platform"):
+                previous = {}  # Explicit --resume may retry a known pre-write failure or a skipped duplicate.
             metadata = FileMetadata(**item["metadata"], file_path=Path(item["path"]), upload_type=UploadType(item["upload_type"]))
             if not previous:
                 # Full content identity catches duplicates even when filenames differ.
@@ -199,7 +201,8 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
                 previous = {"state": "in_flight", "upload_id": upload_id}
                 journal["results"][name] = previous
                 atomic_json(journal_path, journal)
-                result = upload_file(metadata, token, target, upload_id=upload_id, expected_sha256=fingerprints[name]["sha256"])
+                result = upload_file(metadata, token, target, upload_id=upload_id, expected_sha256=fingerprints[name]["sha256"],
+                                     allow_duplicate=allow_duplicates)
                 if result.already_on_platform:
                     previous.update(already_on_platform(result.dataset_id, result.error))
                     atomic_json(journal_path, journal)

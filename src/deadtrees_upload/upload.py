@@ -45,7 +45,8 @@ def format_size(size_bytes: int) -> str:
 def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url: str,
                 chunk_size: int = DEFAULT_CHUNK_SIZE, progress: Optional[Progress] = None,
                 task_id: Optional[TaskID] = None, max_retries: int = 3,
-                upload_id: Optional[str] = None, expected_sha256: Optional[str] = None) -> UploadResult:
+                upload_id: Optional[str] = None, expected_sha256: Optional[str] = None,
+                allow_duplicate: bool = False) -> UploadResult:
     """Retry only 401 responses known to occur before the server writes a chunk.
 
     Transport errors and other responses may occur after append or dataset creation.
@@ -75,6 +76,9 @@ def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url:
             form[target] = str(value)
     if metadata.upload_type:
         form["upload_type"] = metadata.upload_type.value
+    if allow_duplicate:
+        # Explicit override: the platform accepts a file it already holds as a new dataset.
+        form["allow_duplicate"] = "true"
     attempted = False
     transmitted_hash = hashlib.sha256()
     try:

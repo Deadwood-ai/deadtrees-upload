@@ -195,7 +195,9 @@ recorded as `already_on_platform`, with the existing dataset ID when your accoun
 may see it. The API rejects the same files when an upload completes, which the
 receipt records the same way. Either outcome is final, not a failure: if the
 existing dataset failed processing or you believe the file differs, contact
-info@deadtrees.earth instead of re-uploading. Byte-offset resume is unavailable.
+info@deadtrees.earth instead of re-uploading. To deliberately upload such a file
+as a new dataset anyway, add `--allow-duplicates`; with `--resume` it also
+uploads files an earlier run skipped as `already_on_platform`. Byte-offset resume is unavailable.
 
 The current chunk endpoint appends later chunks and is **not idempotent**. Only
 an explicit authentication rejection is retried after refreshing credentials.

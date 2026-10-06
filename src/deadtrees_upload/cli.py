@@ -68,6 +68,7 @@ def main(
     yes: bool = typer.Option(False, "--yes", help="Confirm the authorized upload without prompting"),
     resume: bool = typer.Option(False, "--resume", help="Reuse the agent receipt; never retry unresolved uploads"),
     process: bool = typer.Option(False, "--process", help="Also request platform processing after upload"),
+    allow_duplicates: bool = typer.Option(False, "--allow-duplicates", help="Upload files deadtrees.earth already holds as new datasets instead of skipping them"),
 	dry_run: bool = typer.Option(
 		False,
 		"--dry-run",
@@ -105,7 +106,7 @@ def main(
 				validate_url(api_url)
 				token = batch.authenticate(api_url, email)
 				warnings = {item["filename"]: item["warnings"] for item in report["files"] if item["warnings"]}
-				report = batch.submit(report, data_dir, metadata, api_url, token, resume, process)
+				report = batch.submit(report, data_dir, metadata, api_url, token, resume, process, allow_duplicates)
 				report["warnings"] = warnings
 				code = report.pop("exit_code")
 		except batch.BatchError as e:
@@ -232,6 +233,7 @@ def main(
 		dry_run,
 		session=upload_session,
 		data_dir=data_dir,
+		allow_duplicates=allow_duplicates,
 	)
 	
 	# Clean up session file on successful completion

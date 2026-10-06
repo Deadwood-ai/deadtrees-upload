@@ -163,7 +163,9 @@ Do not switch to the wizard to bypass an agent receipt or lock. Only a confirmed
 `not_uploaded` state permits an explicit `--resume` retry after fixing its cause.
 Files deadtrees.earth already holds are skipped before upload and recorded as
 `already_on_platform` (exit code 0). Report them to the user; never rename,
-re-encode or otherwise alter a file to get past the check. No byte-offset resume
+re-encode or otherwise alter a file to get past the check. Add
+`--allow-duplicates` only when the user explicitly asks to upload those files as
+new datasets. No byte-offset resume
 is available.
 
 Exit codes: `0` requested command succeeded; `2` inputs/options invalid;

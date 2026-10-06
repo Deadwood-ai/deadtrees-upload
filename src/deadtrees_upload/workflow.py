@@ -111,6 +111,7 @@ def do_upload(
 	dry_run: bool,
 	session: Optional[UploadSessionState] = None,
 	data_dir: Optional[Path] = None,
+	allow_duplicates: bool = False,
 ) -> List[UploadResult]:
 	"""Upload all valid files with session state tracking."""
 	print_step(6, "Upload")
@@ -159,16 +160,17 @@ def do_upload(
 
 		# Ask the platform which files it already holds, before any bytes are sent
 		already_on_platform = []
-		with console.status("[bold green]Checking deadtrees.earth for files already uploaded...[/bold green]"):
-			for result in valid_results:
-				filename = result.metadata.filename
-				file_hash = session.file_hashes.get(filename)
-				if not file_hash or filename in session.files_skipped:
-					continue
-				existing = find_remote_duplicate(file_hash, api_url, token)
-				if existing:
-					already_on_platform.append((filename, existing.describe()))
-					session.mark_skipped(filename, existing.describe())
+		if not allow_duplicates:
+			with console.status("[bold green]Checking deadtrees.earth for files already uploaded...[/bold green]"):
+				for result in valid_results:
+					filename = result.metadata.filename
+					file_hash = session.file_hashes.get(filename)
+					if not file_hash or filename in session.files_skipped:
+						continue
+					existing = find_remote_duplicate(file_hash, api_url, token)
+					if existing:
+						already_on_platform.append((filename, existing.describe()))
+						session.mark_skipped(filename, existing.describe())
 
 		show_already_on_platform(already_on_platform)
 		if duplicates or already_on_platform:
@@ -231,6 +233,7 @@ def do_upload(
 				api_url=api_url,
 				progress=progress,
 				task_id=file_task,
+				allow_duplicate=allow_duplicates,
 			)
 			
 			upload_results.append(upload_result)

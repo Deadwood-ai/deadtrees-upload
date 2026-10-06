@@ -372,7 +372,7 @@ def test_human_wizard_route_preserved(inputs, monkeypatch):
     monkeypatch.setattr(cli, "do_upload", lambda *args, **kwargs: calls.append(args) or [])
     cli.main(SimpleNamespace(invoked_subcommand=None), data_dir=inputs[0], metadata=inputs[1],
              email=None, api_url=cli.DEFAULT_API_URL, non_interactive=False, json_output=False,
-             yes=False, resume=False, process=False, dry_run=False)
+             yes=False, resume=False, process=False, allow_duplicates=False, dry_run=False)
     assert len(calls) == 1 and calls[0][0][0].is_valid
 
 
@@ -609,7 +609,7 @@ def test_wizard_cannot_bypass_agent_receipts(inputs, monkeypatch, marker):
     with pytest.raises(typer.Exit) as error:
         cli.main(SimpleNamespace(invoked_subcommand=None), data_dir=inputs[0], metadata=inputs[1],
                  email=None, api_url=cli.DEFAULT_API_URL, non_interactive=False, json_output=False,
-                 yes=False, resume=False, process=False, dry_run=False)
+                 yes=False, resume=False, process=False, allow_duplicates=False, dry_run=False)
     assert error.value.exit_code == 5
     assert (inputs[0] / marker).read_text() == "preserve"
 
@@ -717,3 +717,29 @@ def test_wizard_skips_files_already_on_platform(inputs, monkeypatch):
     uploaded = workflow.do_upload(results, "test-token", "https://example.test/api/v1", dry_run=False,
                                   session=session, data_dir=inputs[0])
     assert uploaded == [] and "dataset 5" in session.files_skipped["rgb.tif"]
+
+
+def test_allow_duplicates_skips_lookup_and_asks_the_api_to_accept(inputs, monkeypatch):
+    calls = []
+    def handle(request):
+        calls.append(request.url.path)
+        assert request.url.path == "/api/v1/datasets/chunk"
+        assert b'name="allow_duplicate"\r\n\r\ntrue' in request.read()
+        return httpx.Response(200, json={"id": 31})
+    http_mock(monkeypatch, handle, answer_lookup=False)
+    result = batch.submit(batch.plan(*inputs), *inputs, "https://example.test/api/v1", "test-token",
+                          allow_duplicates=True)
+    assert result["results"]["rgb.tif"]["state"] == "uploaded" and calls == ["/api/v1/datasets/chunk"]
+
+
+def test_resume_with_allow_duplicates_uploads_a_skipped_file(inputs, monkeypatch):
+    def handle(request):
+        if request.url.path.startswith("/rest/v1/rpc/"):
+            return httpx.Response(200, json=[{"dataset_id": 7, "is_own": True}])
+        return httpx.Response(200, json={"id": 32})
+    http_mock(monkeypatch, handle, answer_lookup=False)
+    report = batch.plan(*inputs)
+    assert batch.submit(report, *inputs, "https://example.test/api/v1", "test-token")["results"]["rgb.tif"]["state"] == "already_on_platform"
+    result = batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", resume=True, allow_duplicates=True)
+    assert result["results"]["rgb.tif"] == {"state": "uploaded", "upload_id": result["results"]["rgb.tif"]["upload_id"],
+                                            "dataset_id": 32, "error": None}
