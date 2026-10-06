@@ -143,6 +143,10 @@ def do_upload(
 			console.print(f"[dim]Skipping {len(already_done)} already-uploaded files[/dim]")
 			valid_results = [r for r in valid_results if r.metadata.filename not in session.files_completed]
 		
+		# Skips are decided afresh on every run, so a resumed session neither re-uploads
+		# a file skipped earlier nor keeps skipping one that --allow-duplicates now permits.
+		session.files_skipped.clear()
+
 		# Check for local duplicates (same hash in this batch)
 		seen_hashes = {}
 		duplicates = []
@@ -173,8 +177,7 @@ def do_upload(
 						session.mark_skipped(filename, existing.describe())
 
 		show_already_on_platform(already_on_platform)
-		if duplicates or already_on_platform:
-			valid_results = [r for r in valid_results if r.metadata.filename not in session.files_skipped]
+		valid_results = [r for r in valid_results if r.metadata.filename not in session.files_skipped]
 	
 	if not valid_results:
 		console.print("[green]✓[/green] All files already uploaded or skipped")

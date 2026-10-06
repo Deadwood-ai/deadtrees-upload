@@ -743,3 +743,18 @@ def test_resume_with_allow_duplicates_uploads_a_skipped_file(inputs, monkeypatch
     result = batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", resume=True, allow_duplicates=True)
     assert result["results"]["rgb.tif"] == {"state": "uploaded", "upload_id": result["results"]["rgb.tif"]["upload_id"],
                                             "dataset_id": 32, "error": None}
+
+
+def test_resumed_wizard_session_recomputes_skips(inputs, monkeypatch):
+    from deadtrees_upload import workflow
+    from deadtrees_upload.validation import validate_all
+    from deadtrees_upload.dedup import UploadSessionState
+    http_mock(monkeypatch, lambda request: httpx.Response(200, json=[{"dataset_id": 5, "is_own": True}]),
+              answer_lookup=False)
+    monkeypatch.setattr(workflow, "confirm_upload", lambda *args: pytest.fail("a skipped file was offered for upload"))
+    session = UploadSessionState.create(str(inputs[0]), "", "https://example.test/api/v1")
+    session.mark_skipped("rgb.tif", "already on deadtrees.earth (earlier run)")
+    results = validate_all([metadata_for(inputs)])
+    assert workflow.do_upload(results, "test-token", "https://example.test/api/v1", dry_run=False,
+                              session=session, data_dir=inputs[0]) == []
+    assert "dataset 5" in session.files_skipped["rgb.tif"]
