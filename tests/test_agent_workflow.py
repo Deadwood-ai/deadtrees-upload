@@ -26,6 +26,9 @@ def isolated(monkeypatch, tmp_path):
         if key.startswith("DEADTREES_"):
             monkeypatch.delenv(key)
     monkeypatch.setenv("DEADTREES_UPLOAD_CACHE_DIR", str(tmp_path / "cache"))
+    # Synthetic Supabase target for the duplicate lookup; never a real service.
+    monkeypatch.setenv("DEADTREES_SUPABASE_URL", "https://auth.example.test")
+    monkeypatch.setenv("DEADTREES_SUPABASE_KEY", "synthetic-anon")
     # No test can accidentally send HTTP to production or shared local services.
     def blocked(*args, **kwargs):
         raise AssertionError("Unexpected real network request")
@@ -123,7 +126,14 @@ def test_multispectral_geotiff_rejected(tmp_path):
     assert not validate_geotiff(path)[0].is_valid
 
 
-def http_mock(monkeypatch, handler):
+def http_mock(monkeypatch, handler, answer_lookup=True):
+    """Mock all HTTP. By default the platform holds none of the files (empty duplicate lookup)."""
+    if answer_lookup:
+        inner = handler
+        def handler(request):
+            if request.url.path == "/rest/v1/rpc/find_duplicate_upload":
+                return httpx.Response(200, json=[])
+            return inner(request)
     real_client = httpx.Client
     class MockClient(real_client):
         def __init__(self, *args, **kwargs):
@@ -219,6 +229,8 @@ def test_processing_failure_keeps_dataset_and_prevents_requeue(inputs, monkeypat
 
 
 def test_custom_target_no_production_auth_fallback(monkeypatch):
+    monkeypatch.delenv("DEADTREES_SUPABASE_URL")
+    monkeypatch.delenv("DEADTREES_SUPABASE_KEY")
     from deadtrees_upload.config import supabase_config
     with pytest.raises(ValueError, match="Custom API"):
         supabase_config("https://localhost.attacker.test/api/v1")
@@ -621,3 +633,87 @@ def test_later_contribution_in_new_directory_preserves_first_batch(inputs, monke
     result = batch.submit(batch.plan(later, metadata), later, metadata, "https://example.test/api/v1", "token")
     assert result["success"] and len(calls) == 2
     assert receipt.read_bytes() == original
+
+
+def test_fingerprint_matches_platform_definition(tmp_path):
+    from deadtrees_upload.dedup import get_file_identifier
+    import hashlib
+    small = tmp_path / "small.tif"
+    small.write_bytes(b"abc" * 1000)
+    data = small.read_bytes()
+    # shared.hash.get_file_identifier hashes a file smaller than the sample twice.
+    assert get_file_identifier(small) == hashlib.sha256(str(len(data)).encode() + data + data).hexdigest()
+    large = tmp_path / "large.tif"
+    large.write_bytes(bytes(range(256)) * 400)
+    data = large.read_bytes()
+    expected = hashlib.sha256(str(len(data)).encode() + data[:1000] + data[-1000:]).hexdigest()
+    assert get_file_identifier(large, sample_size=1000) == expected
+
+
+def test_files_already_on_platform_are_skipped_before_upload(inputs, monkeypatch):
+    from deadtrees_upload.dedup import get_file_identifier
+    calls = []
+    def handle(request):
+        calls.append(request.url.path)
+        assert request.url.path == "/rest/v1/rpc/find_duplicate_upload"
+        assert request.headers["Authorization"] == "Bearer test-token"
+        assert json.loads(request.content) == {"p_fingerprint": get_file_identifier(inputs[0] / "rgb.tif")}
+        return httpx.Response(200, json=[{"dataset_id": 7, "is_own": False}])
+    http_mock(monkeypatch, handle, answer_lookup=False)
+    report = batch.plan(*inputs)
+    result = batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", process=True)
+    assert result["success"] and result["exit_code"] == 0
+    entry = result["results"]["rgb.tif"]
+    assert entry["state"] == "already_on_platform" and entry["dataset_id"] == 7 and "dataset 7" in entry["message"]
+    assert calls == ["/rest/v1/rpc/find_duplicate_upload"]
+    # Resume keeps the decision and asks nothing again.
+    result = batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", resume=True)
+    assert result["success"] and len(calls) == 1
+
+
+def test_hidden_existing_dataset_is_not_named(inputs, monkeypatch):
+    http_mock(monkeypatch, lambda request: httpx.Response(200, json=[{"dataset_id": None, "is_own": False}]),
+              answer_lookup=False)
+    result = batch.submit(batch.plan(*inputs), *inputs, "https://example.test/api/v1", "test-token")
+    entry = result["results"]["rgb.tif"]
+    assert entry["state"] == "already_on_platform" and entry["dataset_id"] is None
+
+
+def test_failed_lookup_uploads_and_api_rejection_is_recorded(inputs, monkeypatch):
+    calls = []
+    def handle(request):
+        calls.append(request.url.path)
+        if request.url.path.startswith("/rest/v1/rpc/"):
+            return httpx.Response(404, json={"message": "function not found"})
+        return httpx.Response(409, json={"detail": {"code": "DUPLICATE_UPLOAD", "existing_dataset_id": 9,
+                                                    "message": "This file is already on deadtrees.earth as dataset 9."}})
+    http_mock(monkeypatch, handle, answer_lookup=False)
+    report = batch.plan(*inputs)
+    result = batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", process=True)
+    assert result["success"] and result["exit_code"] == 0
+    entry = result["results"]["rgb.tif"]
+    assert entry["state"] == "already_on_platform" and entry["dataset_id"] == 9
+    assert calls == ["/rest/v1/rpc/find_duplicate_upload", "/api/v1/datasets/chunk"]
+    # A known rejection is not an unresolved outcome: resume accepts the receipt and uploads nothing.
+    assert batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", resume=True)["success"]
+    assert len(calls) == 2
+
+
+def test_other_409_stays_unresolved(inputs, monkeypatch):
+    http_mock(monkeypatch, lambda request: httpx.Response(409, json={"detail": "Upload contract changed"}))
+    result = upload_file(metadata_for(inputs), "test-token", "https://example.test/api/v1")
+    assert not result.success and result.outcome_unknown and not result.already_on_platform
+
+
+def test_wizard_skips_files_already_on_platform(inputs, monkeypatch):
+    from deadtrees_upload import workflow
+    from deadtrees_upload.validation import validate_all
+    from deadtrees_upload.dedup import UploadSessionState
+    http_mock(monkeypatch, lambda request: httpx.Response(200, json=[{"dataset_id": 5, "is_own": True}]),
+              answer_lookup=False)
+    monkeypatch.setattr(workflow, "confirm_upload", lambda *args: pytest.fail("nothing left to confirm"))
+    results = validate_all([metadata_for(inputs)])
+    session = UploadSessionState.create(str(inputs[0]), "", "https://example.test/api/v1")
+    uploaded = workflow.do_upload(results, "test-token", "https://example.test/api/v1", dry_run=False,
+                                  session=session, data_dir=inputs[0])
+    assert uploaded == [] and "dataset 5" in session.files_skipped["rgb.tif"]

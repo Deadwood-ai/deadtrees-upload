@@ -83,7 +83,7 @@ def main(
 	Features:
 	- Auto-refresh tokens for long uploads
 	- Resume interrupted uploads
-	- Local duplicate detection
+	- Duplicate detection, within the batch and against deadtrees.earth
 	- Session state saved to .deadtrees-upload-session.json
 	"""
 	# If a subcommand was invoked, skip main logic
@@ -235,14 +235,15 @@ def main(
 	)
 	
 	# Clean up session file on successful completion
-	if upload_results and all(r.success for r in upload_results):
+	finished = upload_results and all(r.success or r.already_on_platform for r in upload_results)
+	if finished:
 		session_file = get_session_file_path(data_dir)
 		session_file.unlink(missing_ok=True)
 	
 	# Summary
 	if upload_results:
 		show_summary(upload_results, api_url)
-		if not all(r.success for r in upload_results):
+		if not finished:
 			raise typer.Exit(4)
 
 

@@ -14,6 +14,7 @@ from .state import atomic_json
 from .metadata import COLUMN_ALIASES, find_column_mapping, parse_metadata, read_metadata_file
 from .validation import find_uploadable_files, match_files_to_metadata, validate_all
 from .upload import upload_file
+from .dedup import find_remote_duplicate, get_file_identifier
 from .process import trigger_processing, get_processing_tasks
 
 
@@ -155,7 +156,7 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
             journal = {"schema_version": 1, "api_url": target, "inputs": fingerprints, "user_id": user_id, "results": {}}
         for name, previous in journal["results"].items():
             if (name not in fingerprints or not isinstance(previous, dict)
-                    or previous.get("state") not in {"in_flight", "unknown", "failed", "not_uploaded", "uploaded", "duplicate"}):
+                    or previous.get("state") not in {"in_flight", "unknown", "failed", "not_uploaded", "uploaded", "duplicate", "already_on_platform"}):
                 raise BatchError("Invalid upload receipt state; preserve it for reconciliation", 5)
             if previous["state"] in {"uploaded", "duplicate"} and (type(previous.get("dataset_id")) is not int or previous["dataset_id"] <= 0):
                 raise BatchError("Receipt lacks a confirmed dataset ID; reconcile before continuing", 5)
@@ -163,6 +164,15 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
                 raise BatchError(f"{name}: upload outcome requires reconciliation (upload_id={previous.get('upload_id')}). Do not automatically re-upload", 5)
             if previous.get("processing") in {"in_flight", "unknown"}:
                 raise BatchError(f"Dataset {previous.get('dataset_id')}: processing request unresolved; use status, do not requeue automatically", 5)
+        atomic_json(journal_path, journal)
+        # Flag every file the platform already holds before sending any bytes.
+        for item in entries:
+            name = item["metadata"]["filename"]
+            if journal["results"].get(name, {}).get("state") not in {None, "not_uploaded"}:
+                continue
+            existing = find_remote_duplicate(get_file_identifier(Path(item["path"])), target, token)
+            if existing:
+                journal["results"][name] = already_on_platform(existing.dataset_id, existing.describe())
         atomic_json(journal_path, journal)
         for item in entries:
             name = item["metadata"]["filename"]
@@ -190,6 +200,10 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
                 journal["results"][name] = previous
                 atomic_json(journal_path, journal)
                 result = upload_file(metadata, token, target, upload_id=upload_id, expected_sha256=fingerprints[name]["sha256"])
+                if result.already_on_platform:
+                    previous.update(already_on_platform(result.dataset_id, result.error))
+                    atomic_json(journal_path, journal)
+                    continue
                 previous.update(state="uploaded" if result.success else "unknown" if result.outcome_unknown else "not_uploaded",
                                 dataset_id=result.dataset_id, error=result.error)
                 atomic_json(journal_path, journal)
@@ -210,6 +224,14 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
                 "receipt": str(journal_path), "results": journal["results"], "exit_code": 0}
     finally:
         lock_path.unlink(missing_ok=True)
+
+
+def already_on_platform(dataset_id, message) -> dict:
+    """Receipt entry for a file the platform already holds; it is skipped, not failed.
+
+    dataset_id is None when the caller may not see the existing dataset.
+    """
+    return {"state": "already_on_platform", "dataset_id": dataset_id, "message": message}
 
 
 def status(dataset_id, api_url, email=None):

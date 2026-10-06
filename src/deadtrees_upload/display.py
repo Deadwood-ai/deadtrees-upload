@@ -86,14 +86,16 @@ def show_summary(upload_results: List[UploadResult], api_url: str):
 	console.print()
 	
 	success_count = sum(1 for r in upload_results if r.success)
-	failed_count = len(upload_results) - success_count
+	already_count = sum(1 for r in upload_results if r.already_on_platform)
+	failed = [r for r in upload_results if not r.success and not r.already_on_platform]
 	
 	console.print(f"[green]✓ Successful:[/green] {success_count}")
-	if failed_count:
-		console.print(f"[red]✗ Failed:[/red] {failed_count}")
+	if already_count:
+		console.print(f"[yellow]! Already on deadtrees.earth:[/yellow] {already_count}")
+	if failed:
+		console.print(f"[red]✗ Failed:[/red] {len(failed)}")
 	
 	# Show failed uploads
-	failed = [r for r in upload_results if not r.success]
 	if failed:
 		console.print()
 		console.print("[bold]Failed uploads:[/bold]")
@@ -147,3 +149,13 @@ def show_duplicates(duplicates: List[tuple], max_show: int = 3):
 			console.print(f"  • {dup} = {orig}")
 		if len(duplicates) > max_show:
 			console.print(f"  ... and {len(duplicates) - max_show} more")
+
+
+def show_already_on_platform(files: List[tuple], max_show: int = 5):
+	"""Show files skipped because deadtrees.earth already holds them."""
+	if files:
+		console.print(f"[yellow]![/yellow] Skipping {len(files)} files already on deadtrees.earth:")
+		for filename, reason in files[:max_show]:
+			console.print(f"  • {filename}: {reason}")
+		if len(files) > max_show:
+			console.print(f"  ... and {len(files) - max_show} more")

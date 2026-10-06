@@ -161,7 +161,10 @@ Treat each directory as a fixed batch. Put later, genuinely new contributions in
 a new directory with separate metadata and receipt; preserve the old receipt.
 Do not switch to the wizard to bypass an agent receipt or lock. Only a confirmed
 `not_uploaded` state permits an explicit `--resume` retry after fixing its cause.
-No byte-offset resume or server-wide duplicate prevention is available.
+Files deadtrees.earth already holds are skipped before upload and recorded as
+`already_on_platform` (exit code 0). Report them to the user; never rename,
+re-encode or otherwise alter a file to get past the check. No byte-offset resume
+is available.
 
 Exit codes: `0` requested command succeeded; `2` inputs/options invalid;
 `3` authentication unavailable; `4` request failed; `5` reconciliation required.
