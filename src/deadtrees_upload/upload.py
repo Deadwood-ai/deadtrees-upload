@@ -119,6 +119,9 @@ def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url:
     # with neither, nothing can be on the server and a retry is safe.
     attempted = [False]
     stored = [0]
+    # A network or server error may hide a chunk the server stored; a later login
+    # rejection does not prove that nothing was written.
+    uncertain = [False]
     stop = threading.Event()
 
     class Stopped(Exception):
@@ -137,19 +140,25 @@ def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url:
             if stop.is_set():
                 raise Stopped(failed("Upload stopped", True))
             attempted[0] = True
+            used = bearer()
             try:
                 response = client.post(url, data={**form, "chunk_index": str(index)},
                                        files={"file": (path.name, data, "application/octet-stream")},
-                                       headers={"Authorization": f"Bearer {bearer()}"})
+                                       headers={"Authorization": f"Bearer {used}"})
             except httpx.TransportError:
                 response = None
             if response is not None and response.status_code == 401:
                 with lock:
+                    if bearer() != used:
+                        continue  # Another chunk already refreshed the login: retry with the new token.
                     if isinstance(token, AuthSession) and refreshes[0] + 1 < max_retries:
                         refreshes[0] += 1
                         token.refresh()
                         continue
-                raise Stopped(failed("Authentication rejected; run again with --resume after signing in", stored[0] > 0))
+                raise Stopped(failed("Authentication rejected; run again with --resume after signing in",
+                                     stored[0] > 0 or uncertain[0]))
+            if response is None or response.status_code in RETRYABLE_STATUS:
+                uncertain[0] = True
             if response is not None and response.status_code not in RETRYABLE_STATUS:
                 duplicate = rejected_as_duplicate(response)
                 if duplicate:
@@ -173,7 +182,11 @@ def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url:
             missing = list(range(chunks))
             workers = PARALLEL_CHUNKS
             if resume:
-                status = _server_status(client, api_url, upload_id, bearer())
+                try:
+                    status = _server_status(client, api_url, upload_id, bearer())
+                except Exception:
+                    # Without the server's view the earlier outcome stays unresolved; try --resume again.
+                    return failed("Could not read the upload's status; run again with --resume", True)
                 if status is not None:
                     if status["state"] == "complete" and (status.get("response") or {}).get("id"):
                         return UploadResult(filename=metadata.filename, success=True,

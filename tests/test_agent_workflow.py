@@ -884,3 +884,44 @@ def test_resume_fills_the_gaps_of_a_parallel_upload(inputs, monkeypatch):
     result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", chunk_size=500,
                          upload_id="up-1", resume=True)
     assert result.success and sorted(sent) == [1, *range(4, total)]
+
+
+def test_failed_status_read_keeps_the_upload_unresolved(inputs, monkeypatch):
+    http_mock(monkeypatch, lambda request: httpx.Response(503))
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", upload_id="up-1", resume=True)
+    assert not result.success and result.outcome_unknown and result.upload_id == "up-1"
+
+
+def test_login_rejection_after_an_uncertain_write_stays_unresolved(inputs, monkeypatch, no_wait):
+    replies = iter([httpx.Response(503), httpx.Response(401)])
+    http_mock(monkeypatch, lambda request: next(replies))
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1")
+    assert not result.success and result.outcome_unknown
+
+
+def test_parallel_chunks_share_one_login_refresh(inputs, monkeypatch):
+    import threading, time
+    from deadtrees_upload.auth import AuthSession
+    session = AuthSession("old", "refresh", "user", time.time() + 3600, "https://auth.example.test", "anon")
+    refreshes, barrier = [], threading.Barrier(upload_module.PARALLEL_CHUNKS, timeout=5)
+    def handle(request):
+        if request.url.path == "/auth/v1/token":
+            refreshes.append(1)
+            return httpx.Response(200, json={"access_token": "new", "refresh_token": "next", "expires_in": 3600})
+        if request.headers["Authorization"] == "Bearer old":
+            barrier.wait()  # every parallel chunk is rejected with the same stale token
+            return httpx.Response(401)
+        return httpx.Response(200, json={"id": 4})
+    http_mock(monkeypatch, handle)
+    result = upload_file(metadata_for(inputs), session, "https://example.test/api/v1", chunk_size=500)
+    assert result.success and len(refreshes) == 1
+
+
+def test_wizard_session_with_a_failed_upload_can_resume(tmp_path):
+    from deadtrees_upload.dedup import UploadSessionState
+    session = UploadSessionState.create(str(tmp_path), "meta.csv", "https://example.test/api/v1")
+    session.files_total = 1
+    session.mark_failed("rgb.tif", "network")
+    assert session.is_complete
+    session.upload_ids["rgb.tif"] = "up-1"
+    assert not session.is_complete

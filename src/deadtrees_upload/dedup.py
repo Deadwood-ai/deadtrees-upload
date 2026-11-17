@@ -109,7 +109,8 @@ class UploadSessionState:
 	@property
 	def is_complete(self) -> bool:
 		"""Check if all files have been processed."""
-		return self.files_pending == 0
+		# A failed file with an upload ID can still continue on the server.
+		return self.files_pending == 0 and not any(name in self.upload_ids for name in self.files_failed)
 	
 	def mark_completed(self, filename: str, dataset_id: int) -> None:
 		"""Mark a file as successfully uploaded."""
