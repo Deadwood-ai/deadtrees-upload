@@ -160,8 +160,9 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
                 raise BatchError("Invalid upload receipt state; preserve it for reconciliation", 5)
             if previous["state"] in {"uploaded", "duplicate"} and (type(previous.get("dataset_id")) is not int or previous["dataset_id"] <= 0):
                 raise BatchError("Receipt lacks a confirmed dataset ID; reconcile before continuing", 5)
-            if previous.get("state") in {"in_flight", "unknown", "failed"}:
-                raise BatchError(f"{name}: upload outcome requires reconciliation (upload_id={previous.get('upload_id')}). Do not automatically re-upload", 5)
+            if previous.get("state") in {"in_flight", "unknown", "failed"} and not (resume and previous.get("upload_id")):
+                raise BatchError(f"{name}: upload stopped before it was confirmed (upload_id={previous.get('upload_id')}). "
+                                 "Run again with --resume to continue it; do not start a new upload", 5)
             if previous.get("processing") in {"in_flight", "unknown"}:
                 raise BatchError(f"Dataset {previous.get('dataset_id')}: processing request unresolved; use status, do not requeue automatically", 5)
         atomic_json(journal_path, journal)
@@ -184,6 +185,7 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
             if previous.get("state") == "not_uploaded" or (allow_duplicates and previous.get("state") == "already_on_platform"):
                 previous = {}  # Explicit --resume may retry a known pre-write failure or a skipped duplicate.
             metadata = FileMetadata(**item["metadata"], file_path=Path(item["path"]), upload_type=UploadType(item["upload_type"]))
+            fresh = not previous
             if not previous:
                 # Full content identity catches duplicates even when filenames differ.
                 duplicate = next((n for n, result in journal["results"].items()
@@ -197,12 +199,16 @@ def submit(report, data_path, metadata_path, api_url, token, resume=False, proce
                                                "dataset_id": journal["results"][duplicate]["dataset_id"]}
                     atomic_json(journal_path, journal)
                     continue
-                upload_id = str(uuid.uuid4())
-                previous = {"state": "in_flight", "upload_id": upload_id}
+                previous = {"state": "in_flight", "upload_id": str(uuid.uuid4())}
                 journal["results"][name] = previous
                 atomic_json(journal_path, journal)
-                result = upload_file(metadata, token, target, upload_id=upload_id, expected_sha256=fingerprints[name]["sha256"],
-                                     allow_duplicate=allow_duplicates)
+            if previous.get("state") in {"in_flight", "unknown", "failed"}:
+                # A stopped upload continues under its upload ID: the server reports which chunks arrived.
+                previous["state"] = "in_flight"
+                atomic_json(journal_path, journal)
+                result = upload_file(metadata, token, target, upload_id=previous["upload_id"],
+                                     expected_sha256=fingerprints[name]["sha256"], allow_duplicate=allow_duplicates,
+                                     resume=not fresh)
                 if result.already_on_platform:
                     previous.update(already_on_platform(result.dataset_id, result.error))
                     atomic_json(journal_path, journal)

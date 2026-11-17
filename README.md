@@ -197,17 +197,24 @@ receipt records the same way. Either outcome is final, not a failure: if the
 existing dataset failed processing or you believe the file differs, contact
 info@deadtrees.earth instead of re-uploading. To deliberately upload such a file
 as a new dataset anyway, add `--allow-duplicates`; with `--resume` it also
-uploads files an earlier run skipped as `already_on_platform`. Byte-offset resume is unavailable.
+uploads files an earlier run skipped as `already_on_platform`.
 
-The current chunk endpoint appends later chunks and is **not idempotent**. Only
-an explicit authentication rejection is retried after refreshing credentials.
-Lost/invalid final responses, transport errors and uncertain server errors stop
-without replay. A `not_uploaded` receipt means no chunk was accepted; after fixing
-the cause, explicit `--resume` may retry it. Authentication rejection after an
-earlier accepted chunk is unresolved and cannot be retried this way.
-Interrupted/in-flight uploads or processing requests remain
-unresolved until inspected. Do not delete the receipt and start again to bypass
-this boundary. A crash may leave a lock: confirm the owner stopped before removing
+Three chunks are sent at the same time; the platform places each by its index,
+so a long or unsteady connection is used better. The chunk endpoint keeps a
+receipt per chunk and answers a repeated chunk without writing it twice, so each
+chunk is retried on network errors and busy or
+server errors (8 tries with growing pauses), and once more after a refreshed
+login. An upload that still stops keeps its upload ID in the receipt. Run again
+with `--resume` to continue it: the CLI asks the server which chunks arrived
+(`GET /datasets/uploads/{upload_id}`), checks every received chunk against the
+file, and sends only the missing ones. The chunk that completes the upload is
+sent last, after the file is checked unchanged. A finished upload whose reply was lost returns its
+dataset ID; an upload whose data expired (7 days idle) is recorded as
+`not_uploaded`, and `--resume` then uploads it again. The wizard does the same
+when you choose to resume its session. A `not_uploaded` receipt means no dataset
+was created; after fixing the cause, explicit `--resume` may retry it. Processing
+requests are never repeated automatically. Do not delete the receipt and start
+again: `--resume` continues the same upload. A crash may leave a lock: confirm the owner stopped before removing
 that lock, then use `--resume` to inspect the receipt.
 
 `--process` requests geotiff, COG, thumbnail, metadata, AOI, deadwood/treecover

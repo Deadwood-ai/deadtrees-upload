@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional, List
 
+import uuid
 import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
@@ -229,6 +230,18 @@ def do_upload(
 				total=file_size,
 			)
 			
+			# A file this session already started continues under its upload ID.
+			upload_id = session.upload_ids.get(metadata.filename) if session else None
+			resume = upload_id is not None
+			if session and not resume:
+				upload_id = str(uuid.uuid4())
+				session.upload_ids[metadata.filename] = upload_id
+				if data_dir:
+					try:
+						session.save(get_session_file_path(data_dir))
+					except Exception:
+						pass  # Without the saved ID a rerun starts this file again
+			
 			# Upload with token refresh support
 			upload_result = upload_file(
 				metadata=metadata,
@@ -237,6 +250,8 @@ def do_upload(
 				progress=progress,
 				task_id=file_task,
 				allow_duplicate=allow_duplicates,
+				upload_id=upload_id,
+				resume=resume,
 			)
 			
 			upload_results.append(upload_result)

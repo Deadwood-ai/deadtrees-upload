@@ -1,7 +1,9 @@
 """Behavioral regression checks with synthetic files and mocked HTTP only."""
+import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import zipfile
@@ -18,6 +20,7 @@ from deadtrees_upload import batch
 from deadtrees_upload.cli import app
 from deadtrees_upload.models import FileMetadata, UploadType
 from deadtrees_upload.upload import upload_file
+from deadtrees_upload import upload as upload_module
 
 
 @pytest.fixture(autouse=True)
@@ -166,8 +169,15 @@ def test_chunk_api_payload_and_success(inputs, monkeypatch):
     assert len(requests) > 1
 
 
+@pytest.fixture
+def no_wait(monkeypatch):
+    monkeypatch.setattr(upload_module, "_sleep", lambda _seconds: None)
+
+
 @pytest.mark.parametrize("failure", ["timeout", "http500", "bad_final"])
-def test_ambiguous_upload_never_replayed(inputs, monkeypatch, failure):
+def test_failed_upload_keeps_its_id_for_resume(inputs, monkeypatch, no_wait, failure):
+    """Network and server errors are retried (the API answers repeats idempotently); an
+    invalid final reply is not. Either way the upload ID is kept for a later resume."""
     calls = []
     def handle(request):
         calls.append(request)
@@ -175,8 +185,73 @@ def test_ambiguous_upload_never_replayed(inputs, monkeypatch, failure):
         return httpx.Response(500 if failure == "http500" else 200, json={"detail": "secret-token"})
     http_mock(monkeypatch, handle)
     result = upload_file(metadata_for(inputs), "secret-token", "https://example.test/api/v1")
-    assert not result.success and result.outcome_unknown
-    assert len(calls) == 1 and "secret-token" not in result.model_dump_json()
+    assert not result.success and result.outcome_unknown and result.upload_id
+    assert len(calls) == (1 if failure == "bad_final" else upload_module.CHUNK_ATTEMPTS)
+    assert "secret-token" not in result.model_dump_json()
+
+
+def test_network_hiccup_is_retried_and_finishes(inputs, monkeypatch, no_wait):
+    calls = []
+    def handle(request):
+        calls.append(request)
+        if len(calls) == 1: raise httpx.ConnectError("down")
+        if len(calls) == 2: return httpx.Response(503)
+        return httpx.Response(200, json={"id": 7})
+    http_mock(monkeypatch, handle)
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1")
+    assert result.success and result.dataset_id == 7 and len(calls) == 3
+
+
+def _status_for(path, chunk_size, received, **extra):
+    data = path.read_bytes()
+    chunks = [data[i * chunk_size:(i + 1) * chunk_size] for i in range(received)]
+    total = (len(data) + chunk_size - 1) // chunk_size
+    receipts = [{"size": len(c), "sha256": hashlib.sha256(c).hexdigest()} for c in chunks]
+    return {"upload_id": "up-1", "state": "receiving", "chunks_total": total, "chunks_received": received,
+            "chunks": receipts, **extra}
+
+
+def test_resume_sends_only_missing_chunks(inputs, monkeypatch):
+    path = inputs[0] / "rgb.tif"
+    sent = []
+    def handle(request):
+        if request.method == "GET":
+            assert request.url.path == "/api/v1/datasets/uploads/up-1"
+            return httpx.Response(200, json=_status_for(path, 500, 2))
+        sent.append(re.search(rb'name="chunk_index"\r\n\r\n(\d+)', request.read()).group(1))
+        return httpx.Response(200, json={"id": 11})
+    http_mock(monkeypatch, handle)
+    total = (path.stat().st_size + 499) // 500
+    assert total > 3
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", chunk_size=500,
+                         upload_id="up-1", resume=True, expected_sha256=batch.file_digest(path))
+    assert result.success and result.dataset_id == 11
+    assert sent == [str(i).encode() for i in range(2, total)]
+
+
+def test_resume_refuses_a_different_file(inputs, monkeypatch):
+    path = inputs[0] / "rgb.tif"
+    status = _status_for(path, 2000, 2)
+    status["chunks"][0]["sha256"] = "0" * 64
+    posts = []
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=status)
+        posts.append(request)
+        return httpx.Response(200, json={"id": 1})
+    http_mock(monkeypatch, handle)
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", chunk_size=2000,
+                         upload_id="up-1", resume=True)
+    assert not result.success and "differs" in result.error and posts == []
+
+
+def test_resume_of_a_finished_upload_returns_its_dataset(inputs, monkeypatch):
+    def handle(request):
+        assert request.method == "GET"
+        return httpx.Response(200, json={"upload_id": "up-1", "state": "complete", "response": {"id": 5}})
+    http_mock(monkeypatch, handle)
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", upload_id="up-1", resume=True)
+    assert result.success and result.dataset_id == 5
 
 
 def test_receipt_resume_and_changed_input(inputs, monkeypatch):
@@ -195,18 +270,27 @@ def test_receipt_resume_and_changed_input(inputs, monkeypatch):
         batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", resume=True)
 
 
-def test_unknown_receipt_blocks_resume(inputs, monkeypatch):
+def test_stopped_upload_continues_on_resume(inputs, monkeypatch, no_wait):
     calls = []
     def handle(request):
-        calls.append(request)
-        raise httpx.ReadTimeout("lost response")
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            # The server holds nothing yet for this upload ID: the resume starts at chunk 0.
+            return httpx.Response(404, json={"detail": "Upload not found"})
+        if len(calls) <= upload_module.CHUNK_ATTEMPTS:
+            raise httpx.ReadTimeout("lost response")
+        return httpx.Response(200, json={"id": 77})
     http_mock(monkeypatch, handle)
     report = batch.plan(*inputs)
     result = batch.submit(report, *inputs, "https://example.test/api/v1", "test-token")
     assert result["exit_code"] == 5
-    with pytest.raises(batch.BatchError, match="requires reconciliation"):
-        batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", resume=True)
-    assert len(calls) == 1
+    upload_id = result["results"]["rgb.tif"]["upload_id"]
+    with pytest.raises(batch.BatchError, match="--resume"):
+        batch.submit(report, *inputs, "https://example.test/api/v1", "test-token")
+    resumed = batch.submit(report, *inputs, "https://example.test/api/v1", "test-token", resume=True)
+    assert resumed["success"] and resumed["results"]["rgb.tif"]["dataset_id"] == 77
+    assert resumed["results"]["rgb.tif"]["upload_id"] == upload_id
+    assert ("GET", f"/api/v1/datasets/uploads/{upload_id}") in calls
 
 
 def test_processing_failure_keeps_dataset_and_prevents_requeue(inputs, monkeypatch):
@@ -758,3 +842,86 @@ def test_resumed_wizard_session_recomputes_skips(inputs, monkeypatch):
     assert workflow.do_upload(results, "test-token", "https://example.test/api/v1", dry_run=False,
                               session=session, data_dir=inputs[0]) == []
     assert "dataset 5" in session.files_skipped["rgb.tif"]
+
+
+def test_chunks_go_out_three_at_a_time_and_the_last_waits(inputs, monkeypatch):
+    import threading, time
+    path = inputs[0] / "rgb.tif"
+    lock, state = threading.Lock(), {"now": 0, "most": 0, "order": []}
+    def handle(request):
+        body = request.read()
+        index = int(re.search(rb'name="chunk_index"\r\n\r\n(\d+)', body).group(1))
+        assert re.search(rb'name="chunk_size"\r\n\r\n500\r\n', body)
+        with lock:
+            state["now"] += 1
+            state["most"] = max(state["most"], state["now"])
+        time.sleep(0.05)
+        with lock:
+            state["now"] -= 1
+            state["order"].append(index)
+        return httpx.Response(200, json={"id": 3} if index == total - 1 else {"message": "ok"})
+    http_mock(monkeypatch, handle)
+    total = (path.stat().st_size + 499) // 500
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", chunk_size=500)
+    assert result.success and result.dataset_id == 3
+    assert state["most"] == upload_module.PARALLEL_CHUNKS
+    assert sorted(state["order"]) == list(range(total)) and state["order"][-1] == total - 1
+
+
+def test_resume_fills_the_gaps_of_a_parallel_upload(inputs, monkeypatch):
+    path = inputs[0] / "rgb.tif"
+    status = _status_for(path, 500, 4, contract={"chunk_size": 500})
+    status["chunks"][1] = None
+    status["chunks_received"] = 3
+    sent = []
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=status)
+        sent.append(int(re.search(rb'name="chunk_index"\r\n\r\n(\d+)', request.read()).group(1)))
+        return httpx.Response(200, json={"id": 12})
+    http_mock(monkeypatch, handle)
+    total = (path.stat().st_size + 499) // 500
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", chunk_size=500,
+                         upload_id="up-1", resume=True)
+    assert result.success and sorted(sent) == [1, *range(4, total)]
+
+
+def test_failed_status_read_keeps_the_upload_unresolved(inputs, monkeypatch):
+    http_mock(monkeypatch, lambda request: httpx.Response(503))
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", upload_id="up-1", resume=True)
+    assert not result.success and result.outcome_unknown and result.upload_id == "up-1"
+
+
+def test_login_rejection_after_an_uncertain_write_stays_unresolved(inputs, monkeypatch, no_wait):
+    replies = iter([httpx.Response(503), httpx.Response(401)])
+    http_mock(monkeypatch, lambda request: next(replies))
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1")
+    assert not result.success and result.outcome_unknown
+
+
+def test_parallel_chunks_share_one_login_refresh(inputs, monkeypatch):
+    import threading, time
+    from deadtrees_upload.auth import AuthSession
+    session = AuthSession("old", "refresh", "user", time.time() + 3600, "https://auth.example.test", "anon")
+    refreshes, barrier = [], threading.Barrier(upload_module.PARALLEL_CHUNKS, timeout=5)
+    def handle(request):
+        if request.url.path == "/auth/v1/token":
+            refreshes.append(1)
+            return httpx.Response(200, json={"access_token": "new", "refresh_token": "next", "expires_in": 3600})
+        if request.headers["Authorization"] == "Bearer old":
+            barrier.wait()  # every parallel chunk is rejected with the same stale token
+            return httpx.Response(401)
+        return httpx.Response(200, json={"id": 4})
+    http_mock(monkeypatch, handle)
+    result = upload_file(metadata_for(inputs), session, "https://example.test/api/v1", chunk_size=500)
+    assert result.success and len(refreshes) == 1
+
+
+def test_wizard_session_with_a_failed_upload_can_resume(tmp_path):
+    from deadtrees_upload.dedup import UploadSessionState
+    session = UploadSessionState.create(str(tmp_path), "meta.csv", "https://example.test/api/v1")
+    session.files_total = 1
+    session.mark_failed("rgb.tif", "network")
+    assert session.is_complete
+    session.upload_ids["rgb.tif"] = "up-1"
+    assert not session.is_complete
