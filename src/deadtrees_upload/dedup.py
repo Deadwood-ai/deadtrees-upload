@@ -97,6 +97,8 @@ class UploadSessionState:
 	
 	# Results
 	dataset_ids: Dict[str, int] = field(default_factory=dict)  # filename -> dataset_id
+	# The upload ID of each started file, so a resumed session continues it on the server.
+	upload_ids: Dict[str, str] = field(default_factory=dict)  # filename -> upload_id
 	
 	@property
 	def files_pending(self) -> int:
