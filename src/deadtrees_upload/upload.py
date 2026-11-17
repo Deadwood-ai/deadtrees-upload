@@ -6,7 +6,7 @@ acknowledged without writing twice, and `GET /datasets/uploads/{upload_id}` repo
 which chunks arrived. So a failed request is retried, and a later run with the same
 upload ID continues after the chunks the server holds.
 """
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import time
 import uuid
@@ -206,14 +206,16 @@ def upload_file(metadata: FileMetadata, token: Union[str, AuthSession], api_url:
             # The server finishes the upload when its last missing chunk arrives. That
             # chunk waits until the others are stored and the file is checked unchanged.
             last, others = missing[-1], missing[:-1]
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = [pool.submit(send, client, index) for index in others]
-                try:
-                    for future in futures:
-                        future.result()
-                except Stopped:
-                    stop.set()
-                    raise
+            pool = ThreadPoolExecutor(max_workers=workers)
+            try:
+                for future in as_completed([pool.submit(send, client, index) for index in others]):
+                    future.result()
+            except Stopped:
+                # The first failure stops the chunks still waiting and those between retries.
+                stop.set()
+                raise
+            finally:
+                pool.shutdown(wait=True, cancel_futures=True)
             if path.stat().st_size != size or (expected_sha256 and _file_sha256(path) != expected_sha256):
                 return failed("File changed after validation; final chunk not sent. Reconcile any partial upload", attempted[0])
             response = send(client, last)
