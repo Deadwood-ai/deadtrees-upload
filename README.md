@@ -199,13 +199,16 @@ info@deadtrees.earth instead of re-uploading. To deliberately upload such a file
 as a new dataset anyway, add `--allow-duplicates`; with `--resume` it also
 uploads files an earlier run skipped as `already_on_platform`.
 
-The chunk endpoint keeps a receipt per chunk and answers a repeated chunk
-without writing it twice, so each chunk is retried on network errors and busy or
+Three chunks are sent at the same time; the platform places each by its index,
+so a long or unsteady connection is used better. The chunk endpoint keeps a
+receipt per chunk and answers a repeated chunk without writing it twice, so each
+chunk is retried on network errors and busy or
 server errors (8 tries with growing pauses), and once more after a refreshed
 login. An upload that still stops keeps its upload ID in the receipt. Run again
 with `--resume` to continue it: the CLI asks the server which chunks arrived
 (`GET /datasets/uploads/{upload_id}`), checks every received chunk against the
-file, and sends only the rest. A finished upload whose reply was lost returns its
+file, and sends only the missing ones. The chunk that completes the upload is
+sent last, after the file is checked unchanged. A finished upload whose reply was lost returns its
 dataset ID; an upload whose data expired (7 days idle) is recorded as
 `not_uploaded`, and `--resume` then uploads it again. The wizard does the same
 when you choose to resume its session. A `not_uploaded` receipt means no dataset

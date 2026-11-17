@@ -842,3 +842,45 @@ def test_resumed_wizard_session_recomputes_skips(inputs, monkeypatch):
     assert workflow.do_upload(results, "test-token", "https://example.test/api/v1", dry_run=False,
                               session=session, data_dir=inputs[0]) == []
     assert "dataset 5" in session.files_skipped["rgb.tif"]
+
+
+def test_chunks_go_out_three_at_a_time_and_the_last_waits(inputs, monkeypatch):
+    import threading, time
+    path = inputs[0] / "rgb.tif"
+    lock, state = threading.Lock(), {"now": 0, "most": 0, "order": []}
+    def handle(request):
+        body = request.read()
+        index = int(re.search(rb'name="chunk_index"\r\n\r\n(\d+)', body).group(1))
+        assert re.search(rb'name="chunk_size"\r\n\r\n500\r\n', body)
+        with lock:
+            state["now"] += 1
+            state["most"] = max(state["most"], state["now"])
+        time.sleep(0.05)
+        with lock:
+            state["now"] -= 1
+            state["order"].append(index)
+        return httpx.Response(200, json={"id": 3} if index == total - 1 else {"message": "ok"})
+    http_mock(monkeypatch, handle)
+    total = (path.stat().st_size + 499) // 500
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", chunk_size=500)
+    assert result.success and result.dataset_id == 3
+    assert state["most"] == upload_module.PARALLEL_CHUNKS
+    assert sorted(state["order"]) == list(range(total)) and state["order"][-1] == total - 1
+
+
+def test_resume_fills_the_gaps_of_a_parallel_upload(inputs, monkeypatch):
+    path = inputs[0] / "rgb.tif"
+    status = _status_for(path, 500, 4, contract={"chunk_size": 500})
+    status["chunks"][1] = None
+    status["chunks_received"] = 3
+    sent = []
+    def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=status)
+        sent.append(int(re.search(rb'name="chunk_index"\r\n\r\n(\d+)', request.read()).group(1)))
+        return httpx.Response(200, json={"id": 12})
+    http_mock(monkeypatch, handle)
+    total = (path.stat().st_size + 499) // 500
+    result = upload_file(metadata_for(inputs), "token", "https://example.test/api/v1", chunk_size=500,
+                         upload_id="up-1", resume=True)
+    assert result.success and sorted(sent) == [1, *range(4, total)]
