@@ -10,6 +10,28 @@ and deadwood/tree-cover predictions. Contributors retain responsibility for
 accurate authorship, capture dates, license, access level and permission to share.
 An upload is not evidence that reconstruction or model processing succeeded.
 
+## Keep the conversation fluent
+
+The contributor should only make decisions; do the setup, inspection and commands
+yourself. Unless they ask for detail, follow this order:
+
+1. Say you are setting up the uploader, then install it and inspect the folder.
+2. Report one short finding, such as "Found 14 flights: 9 orthomosaics and 5 folders
+   of raw drone photos." Show thumbnails if your client can.
+3. Ask one decision at a time, using your client's button or question tool when
+   available: **authors**, **license**, **who can see it** (`public`, `viewonly`,
+   `private`), then **capture dates**. Offer dates found in the imagery for a yes or
+   a correction. Point out visible homes, people or vehicles before visibility.
+4. Run offline validation, then sign in with `browser-login` (below).
+5. Ask one final question that states the count and whether processing starts, with
+   **Upload** and **Not yet**. Nothing is uploaded without this yes.
+6. Upload, then report uploaded and already-online counts, and that results appear
+   on their deadtrees.earth profile once processing finishes.
+
+Do not show commands, paths, JSON or receipts in this flow unless something fails
+or the contributor asks. Earlier answers can cover several steps, so do not ask
+again for a decision already given.
+
 ## Decide what the contributor has
 
 - Georeferenced RGB orthomosaic: upload the GeoTIFF directly. The CLI checks
@@ -113,19 +135,32 @@ not fill missing month/day from unrelated embedded timestamps. Preserve original
 
 ## Authenticate and submit only within authorization
 
-For first-time login, hand this command to the **human's own terminal**, on the
-same machine/OS account where the agent will run:
+Sign in by running this yourself, with a tool timeout above 5 minutes:
 
 ```sh
-"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" login
+"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" browser-login
 ```
 
-The human enters email and a masked password there, never in chat. Wait for their
-confirmation that login succeeded; do not capture the password through tools or
-transcripts. This command saves a refreshable session using the existing login
-route and stops without uploading. Subsequent agent validation/upload/status
-commands use that cache under the same OS user and API target. The README explains
-cache scope and provider overrides. Login success alone is not upload authorization.
+If a saved session is valid it returns `already_signed_in` at once. Otherwise tell
+the contributor: "Please sign in to deadtrees.earth in the window that opened. I
+never see your password." The command opens a sign-in page served only on this
+computer's loopback address and waits. It ends with one JSON object with a `state`
+and never prints credentials. Continue on `signed_in` or `already_signed_in`. Never read,
+fill, click or automate that window, even with browser tools; the human signs in.
+Use `--switch-account` only when they ask to change account.
+
+The contributor never needs a terminal. Run the command in the background if your
+client supports it, so you can read its output while it waits. If it prints
+`waiting_for_human`, no window could open: show its `sign_in_url` as a clickable link,
+or open it in your client's browser pane for the human, and keep waiting. Only the
+human types in that page. The link is one-time and works only on the computer running
+the CLI, so a remote host or container also needs a browser there or an authorized
+credential provider. Explain that limit instead of asking for secrets.
+
+On `cancelled`, `timed_out` or `too_many_attempts`, ask before opening it again.
+Sign-in saves a refreshable session and stops without uploading. Later commands reuse
+that cache under the same OS user and API target. The README explains cache scope and
+provider overrides. Sign-in alone is not upload authorization.
 
 An existing authorized credential provider may instead populate environment
 variables `DEADTREES_ACCESS_TOKEN` or `DEADTREES_EMAIL` plus `DEADTREES_PASSWORD`.

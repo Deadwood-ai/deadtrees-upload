@@ -1,13 +1,17 @@
 """Behavioral regression checks with synthetic files and mocked HTTP only."""
 import hashlib
+import http.client
 import io
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 import numpy as np
@@ -17,6 +21,7 @@ from PIL import Image
 from typer.testing import CliRunner
 
 from deadtrees_upload import batch
+from deadtrees_upload.auth import AuthError
 from deadtrees_upload.cli import app
 from deadtrees_upload.models import FileMetadata, UploadType
 from deadtrees_upload.upload import upload_file
@@ -925,3 +930,120 @@ def test_wizard_session_with_a_failed_upload_can_resume(tmp_path):
     assert session.is_complete
     session.upload_ids["rgb.tif"] = "up-1"
     assert not session.is_complete
+
+
+class _BrowserLogin:
+    """Drive the real loopback sign-in server without opening a browser."""
+
+    def __init__(self, monkeypatch, tmp_path, authenticate=None):
+        from deadtrees_upload import browser_login as module
+        self.module = module
+        self.saved = []
+        self.passwords = []
+        def fake_auth(email, password, url, key):
+            self.passwords.append(password)
+            if authenticate:
+                return authenticate(email, password, url, key)
+            if password != "right":
+                raise AuthError("bad")
+            return object()
+        monkeypatch.setattr(module, "create_auth_session", fake_auth)
+        monkeypatch.setattr(module, "save_auth_session", lambda session, api: self.saved.append(session))
+
+    def run(self, script, timeout=5):
+        outcome = {}
+        def opener(url):
+            outcome["url"] = url
+            threading.Thread(target=script, args=(url,), daemon=True).start()
+            return True
+        outcome["state"] = self.module.run_browser_login("https://api.test", "https://sb.test", "key", timeout, opener)
+        return outcome
+
+
+def _loopback(method, url, body=None, headers=None):
+    """Use the standard library: the autouse guard blocks every httpx request."""
+    parts = urlsplit(url)
+    connection = http.client.HTTPConnection(parts.hostname, parts.port, timeout=3)
+    try:
+        connection.request(method, parts.path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        return SimpleNamespace(status_code=response.status, text=response.read().decode(),
+                               headers={k.lower(): v for k, v in response.getheaders()})
+    finally:
+        connection.close()
+
+
+def _post(url, fields, **headers):
+    parts = urlsplit(url)
+    merged = {"Origin": f"{parts.scheme}://{parts.netloc}", "Content-Type": "application/x-www-form-urlencoded"}
+    merged.update({key.replace("_", "-"): value for key, value in headers.items()})
+    return _loopback("POST", url, urlencode(fields), merged)
+
+
+def test_browser_login_retries_then_saves_without_echoing_password(monkeypatch, tmp_path):
+    flow = _BrowserLogin(monkeypatch, tmp_path)
+    pages = []
+    def script(url):
+        pages.append(_loopback("GET", url))
+        pages.append(_post(url, {"email": "a@b.test", "password": "wrong-secret", "action": "sign_in"}))
+        pages.append(_post(url, {"email": "a@b.test", "password": "right", "action": "sign_in"}))
+    assert flow.run(script)["state"] == "signed_in"
+    assert [page.status_code for page in pages] == [200, 401, 200]
+    assert "wrong-secret" not in pages[1].text and "a@b.test" in pages[1].text
+    assert "default-src 'none'" in pages[0].headers["content-security-policy"]
+    assert pages[0].headers["cache-control"] == "no-store"
+    assert pages[0].headers["referrer-policy"] == "same-origin"
+    assert len(flow.saved) == 1
+
+
+@pytest.mark.parametrize("change", ["origin", "host", "path", "content_type"])
+def test_browser_login_refuses_cross_site_requests(monkeypatch, tmp_path, change):
+    flow = _BrowserLogin(monkeypatch, tmp_path)
+    seen = []
+    def script(url):
+        headers, target = {}, url
+        if change == "origin": headers["Origin"] = "https://evil.test"
+        if change == "host": headers["Host"] = "evil.test"
+        if change == "path": target = url.rsplit("/", 1)[0] + "/wrong"
+        if change == "content_type": headers["Content-Type"] = "text/plain"
+        seen.append(_post(target, {"email": "a@b.test", "password": "right"}, **headers).status_code)
+        _post(url, {"action": "cancel"})
+    assert flow.run(script)["state"] == "cancelled"
+    assert seen == [403] and flow.passwords == [] and flow.saved == []
+
+
+def test_browser_login_stops_after_too_many_attempts(monkeypatch, tmp_path):
+    flow = _BrowserLogin(monkeypatch, tmp_path)
+    def script(url):
+        for _ in range(flow.module.MAX_ATTEMPTS):
+            _post(url, {"email": "a@b.test", "password": "wrong", "action": "sign_in"})
+    assert flow.run(script)["state"] == "too_many_attempts"
+    assert flow.saved == []
+
+
+def test_browser_login_times_out_and_reports_missing_browser(monkeypatch, tmp_path):
+    flow = _BrowserLogin(monkeypatch, tmp_path)
+    assert flow.run(lambda url: None, timeout=0.1)["state"] == "timed_out"
+    state = flow.module.run_browser_login("https://api.test", "https://sb.test", "key", 1, lambda url: False)
+    assert state == "browser_unavailable"
+
+
+def test_browser_login_command_skips_window_for_valid_session(monkeypatch):
+    from deadtrees_upload import batch as batch_module, browser_login as module
+    for name in ("DEADTREES_ACCESS_TOKEN", "DEADTREES_EMAIL", "DEADTREES_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(batch_module, "authenticate", lambda api: "token")
+    monkeypatch.setattr(batch_module, "authenticated_user", lambda api, token: "user")
+    monkeypatch.setattr(module, "run_browser_login", lambda *a, **k: pytest.fail("window opened"))
+    result = CliRunner().invoke(app, ["browser-login"])
+    assert result.exit_code == 0 and json.loads(result.stdout)["state"] == "already_signed_in"
+
+
+def test_browser_login_offers_link_when_no_window_opens(monkeypatch, tmp_path):
+    flow = _BrowserLogin(monkeypatch, tmp_path)
+    links = []
+    def on_link(url):
+        links.append(url)
+        threading.Thread(target=_post, args=(url, {"email": "a@b.test", "password": "right", "action": "sign_in"}), daemon=True).start()
+    state = flow.module.run_browser_login("https://api.test", "https://sb.test", "key", 5, lambda url: False, on_link)
+    assert state == "signed_in" and len(links) == 1 and len(flow.saved) == 1

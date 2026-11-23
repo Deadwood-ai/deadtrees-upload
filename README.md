@@ -135,8 +135,25 @@ before technical processing; an upload response does not validate imagery.
 
 ### Authentication and endpoints
 
-For a first-time human login, give the user this command to run in **their own
-terminal on the same machine/OS account** as the agent:
+On a desktop, an agent can start sign-in itself:
+
+```sh
+"$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" browser-login
+```
+
+It reuses a valid saved session or opens a small sign-in window. The page is served
+only on `127.0.0.1` behind a one-time URL, and the password goes from that page to
+the local CLI and on to the deadtrees.earth login service. The command prints one
+JSON result with a `state` and never prints credentials. It exits `0` for `signed_in` or
+`already_signed_in`, otherwise `3`. It closes after sign-in, cancel, five failed
+attempts or 5 minutes (`--timeout`). `--switch-account` replaces a valid session.
+Agents must not fill or automate this window.
+
+If no window can open, the command prints a `waiting_for_human` JSON line with a
+one-time `sign_in_url` for the agent to show as a link, then keeps waiting. The link
+works only on the computer running the CLI.
+
+People who prefer a terminal can instead run this on the same machine/OS account:
 
 ```sh
 "$DT_UPLOAD_REPO/.venv/bin/deadtrees-upload" login

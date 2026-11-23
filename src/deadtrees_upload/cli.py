@@ -1,5 +1,6 @@
 """Main CLI entry point using Typer."""
 
+import os
 import sys
 import json
 import httpx
@@ -275,6 +276,57 @@ def login(api_url: str = typer.Option(DEFAULT_API_URL, "--api-url")):
         typer.echo("Session could not be saved or endpoint configuration is invalid. Check local cache access and configuration; no upload was attempted.", err=True)
         raise typer.Exit(3)
     typer.echo("Session saved for this API target. Agents running as this OS user can reuse it; no upload or processing was requested.")
+
+
+@app.command("browser-login")
+def browser_login(
+    api_url: str = typer.Option(DEFAULT_API_URL, "--api-url"),
+    timeout: int = typer.Option(300, "--timeout", min=10, max=1800, help="Seconds to wait for sign-in"),
+    switch_account: bool = typer.Option(False, "--switch-account", help="Open sign-in even if a session is valid"),
+):
+    """Open a local sign-in window for the human; agents can run this. Ends with one JSON result."""
+    from . import batch
+    from .browser_login import run_browser_login
+
+    messages = {
+        "already_signed_in": "A valid session already exists; no window was opened.",
+        "signed_in": "Signed in and session saved; no upload or processing was requested.",
+        "cancelled": "The human cancelled sign-in.",
+        "timed_out": "Sign-in window timed out.",
+        "too_many_attempts": "Too many failed sign-in attempts.",
+        "save_failed": "Signed in, but the session could not be saved locally.",
+        "provider_override": "DEADTREES_* credential variables override browser sign-in; remove them first.",
+        "unavailable": "Sign-in is unavailable; check endpoint configuration and network.",
+    }
+    try:
+        supabase_url, supabase_key = get_supabase_config(api_url)
+        overridden = any(os.getenv(name) for name in ("DEADTREES_ACCESS_TOKEN", "DEADTREES_EMAIL", "DEADTREES_PASSWORD"))
+        if overridden:
+            state = "provider_override"
+        elif not switch_account and _has_valid_session(batch, api_url):
+            state = "already_signed_in"
+        else:
+            state = run_browser_login(api_url, supabase_url, supabase_key, timeout, on_link=_show_sign_in_link)
+    except (OSError, ValueError, httpx.HTTPError):
+        state = "unavailable"
+    success = state in {"already_signed_in", "signed_in"}
+    typer.echo(json.dumps({"schema_version": 1, "operation": "browser_login", "success": success,
+                           "state": state, "message": messages[state]}))
+    raise typer.Exit(0 if success else 3)
+
+
+def _show_sign_in_link(url):
+    typer.echo(json.dumps({"schema_version": 1, "operation": "browser_login", "state": "waiting_for_human",
+                           "sign_in_url": url, "message": "No window could be opened; show this one-time link to the human."}))
+    sys.stdout.flush()
+
+
+def _has_valid_session(batch, api_url):
+    try:
+        batch.authenticated_user(api_url, batch.authenticate(api_url))
+        return True
+    except (batch.BatchError, AuthError):
+        return False
 
 
 @app.command()

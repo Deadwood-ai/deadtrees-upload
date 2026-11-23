@@ -92,7 +92,7 @@ def authenticate(api_url: str, email=None):
             raise BatchError("Cached authentication target differs from selected Supabase", 3)
         session.get_valid_token()
         return session
-    raise BatchError("Credentials missing: have the human run deadtrees-upload login in their terminal, or use an authorized credential provider for DEADTREES_ACCESS_TOKEN or DEADTREES_EMAIL and DEADTREES_PASSWORD", 3)
+    raise BatchError("Credentials missing: run deadtrees-upload browser-login so the human can sign in, or use an authorized credential provider for DEADTREES_ACCESS_TOKEN or DEADTREES_EMAIL and DEADTREES_PASSWORD", 3)
 
 
 def file_digest(path):
